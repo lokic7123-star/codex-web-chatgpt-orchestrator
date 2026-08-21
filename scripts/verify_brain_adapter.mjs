@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Brain-adapter protocol verification (offline, no quota):
-//   P1 plan: garbage reply -> one repair turn -> valid JSON accepted
-//   P2 plan: garbage twice -> brain_protocol_error (never infinite repair)
-//   P3 review: valid review JSON passes the schema gate as-is
-//   P4 review: malformed review -> one repair -> accepted
+//   P1/P2 plan: garbage reply -> one repair turn -> valid JSON accepted;
+//               garbage twice -> brain_protocol_error (never infinite repair)
+//   P3/P4 review: valid review JSON passes; malformed review -> one repair
 //   P5 checkpoint: {"summary": "..."} extracted into structuredContent
 //   P6 reportTurns:false (default) removes the report method entirely
+// Assertions are named P1..P9 in run order.
 
 import { createBrainAdapter } from "../src/orchestration/brain_adapter.mjs";
 

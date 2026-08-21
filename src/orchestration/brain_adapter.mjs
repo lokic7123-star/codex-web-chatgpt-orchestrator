@@ -108,10 +108,18 @@ function defaultReportPrompt(reportText) {
 }
 
 function defaultReviewPrompt(plan, report) {
+  // acceptance ids as the plan defines them — evidence with other ids cannot
+  // confirm or veto anything (the gate matches by exact id)
+  const criteria = Array.isArray(plan?.acceptance) ? plan.acceptance : [];
+  const idList = criteria.map((c, i) => (typeof c === "string" ? `A${i + 1}` : String(c?.id || `A${i + 1}`))).join(", ");
   return [
     "You are the planning brain reviewing the executor's latest work against the acceptance criteria.",
     'Return JSON only: {"status":"continue|completed|blocked|repeated|awaiting_user","next_task":"... or empty","acceptance":[...],"constraints":[...],"evidence":[...],"reason":"..."}',
-    "Use completed ONLY when every mandatory acceptance criterion has passing evidence. Otherwise blocked/repeated/continue.",
+    "Gate semantics (enforced mechanically after your reply):",
+    "- completed ONLY when every mandatory acceptance criterion has passing evidence.",
+    "- Your evidence items are DECISIVE: one item with pass:false for a criterion VETOES the executor's self-report, even if the executor claims success.",
+    `- Every evidence item MUST use acceptance_id exactly as defined in the plan (${idList || "none defined"}). Items with other ids are ignored by the gate.`,
+    "- If you could not verify a criterion yourself, mark its evidence pass:false and use status blocked/continue — do not guess pass:true.",
     "",
     `PLAN: ${clip(JSON.stringify(plan || {}))}`,
     `REPORT: ${clip(JSON.stringify(report || {}))}`,

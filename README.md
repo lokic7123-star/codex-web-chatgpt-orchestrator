@@ -7,7 +7,7 @@
 A Codex plugin + CLI that drives a **user-visible web ChatGPT session** (the "brain") and a **local `codex app-server` worker** (the "hand") through a bounded brain-hand loop:
 
 ```
-plan → execute → report → review → (repeat until done)
+plan → execute → review → (repeat until done)
 ```
 
 ## Why
@@ -133,7 +133,7 @@ CI runs every offline check on push/PR (see `.github/workflows/ci.yml`); the two
 - No ChatGPT API calls, no cookie reading, no CAPTCHA bypass. You sign in manually in a visible browser.
 - The dedicated profile is separate from your normal browser profile.
 - The worker never auto-approves anything; approval requests stop the run.
-- Repository content sent to web ChatGPT is your choice — review what `run` sends when working with sensitive code.
+- **What automatically goes to your ChatGPT account**: during `run`, the goal, the plan, and the worker's output (summary up to ~6000 characters per round) are sent into your ChatGPT conversation — there is no masking or confirmation step. Do not point sessions at code whose content must not appear in your ChatGPT account history.
 
 ## Optional: give the brain GitHub access
 

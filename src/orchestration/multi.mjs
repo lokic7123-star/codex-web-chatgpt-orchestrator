@@ -133,9 +133,11 @@ export async function runParallelSessions({ entries, manager, port, onLog = null
   // Resume semantics: a session NAME reopens its recorded conversation and
   // rebinds to the existing tab showing it — no new tab, no new conversation.
   const prepared = [];
+  let current = null;
   try {
     for (const entry of entries) {
       const client = new CdpClient({ port });
+      current = client;
       const session = new BrainSession({ client, exclusive: true });
       let conv = entry.conversation;
       let resumed = false;
@@ -154,9 +156,11 @@ export async function runParallelSessions({ entries, manager, port, onLog = null
       }
       await session.openConversation(conv || undefined);
       prepared.push({ entry, client, session });
+      current = null;
       log(`[${entry.name}] ${resumed ? "resumed conversation" : conv ? "opened conversation" : "fresh conversation"} · tab ${client.target?.id || "?"}${session.identity?.external_id ? ` · conversation ${session.identity.external_id}` : ""}`);
     }
   } catch (error) {
+    if (current) { try { current.close(); } catch {} } // the entry mid-setup leaks otherwise
     for (const p of prepared) { try { p.client.close(); } catch {} }
     throw error;
   }

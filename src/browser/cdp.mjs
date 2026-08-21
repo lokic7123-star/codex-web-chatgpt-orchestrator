@@ -307,7 +307,7 @@ export class BrainSession {
       // repeated prompt legitimately yields an identical reply, hash equality
       // would reject a perfectly valid answer forever (seen live).
       const newMessage = count > beforeCount && String(last ?? "").length > 0;
-        if (newMessage) {
+      if (newMessage) {
         // verify we are still in the SAME conversation BEFORE trusting the
         // reply: a reconnect may have rebound us to a different chatgpt.com
         // tab, and that tab's fresh message must not be taken as our answer.

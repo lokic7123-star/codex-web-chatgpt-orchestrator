@@ -2,11 +2,13 @@
 // Parallel-sessions verification.
 //   Part A (live, chat quota only): two EXCLUSIVE brain sessions each get their
 //     own tab, turn in parallel, and each reply must contain its exact nonce;
-//     the two conversations must be distinct. Requires browser + login.
+//     the two conversations must be distinct. Requires browser + login AND
+//     leaves two short test conversations in your ChatGPT history — run it
+//     deliberately with `node scripts/verify_parallel.mjs a`.
 //   Part B (offline, no quota): two mock brain-hand runners share one
 //     SessionManager concurrently; records must stay isolated and land
 //     "completed" through the real acceptance gate.
-// Usage: node scripts/verify_parallel.mjs [a|b|both]   (default: both)
+// Usage: node scripts/verify_parallel.mjs [a|b|both]   (default: b — offline)
 
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -160,7 +162,7 @@ async function partB() {
 
 // ---------------- main ----------------
 
-const only = String(process.argv[2] || "both").toLowerCase();
+const only = String(process.argv[2] || "b").toLowerCase();
 if (only === "both" || only === "a") await partA();
 if (only === "both" || only === "b") await partB();
 console.log(`\n${pass} passed, ${failCount} failed`);
