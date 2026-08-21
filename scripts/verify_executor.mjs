@@ -29,7 +29,8 @@ try {
   await new Promise(r => setTimeout(r, 2000));
 
   const fs = await import("node:fs");
-  const file = `${ws}\\bridge-proof.txt`;
+  const { join } = await import("node:path");
+  const file = join(ws, "bridge-proof.txt");
   const exists = fs.existsSync(file);
   let content = "";
   if (exists) content = fs.readFileSync(file, "utf8").trim();

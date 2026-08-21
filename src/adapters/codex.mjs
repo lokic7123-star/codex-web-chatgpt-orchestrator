@@ -100,6 +100,7 @@ export class CodexExecutor {
     this.pending = new Map();
     this.turnWaiters = new Map();
     this.turnText = new Map();
+    this.sawDelta = new Set();   // turns that streamed agentMessage deltas
     this.watchdogs = new Map();
     this.lastError = null;
   }
@@ -188,15 +189,27 @@ export class CodexExecutor {
 
   _handleNotification(message) {
     const params = message.params || {};
-    const turnId = params.turnId || params.turn?.id || "unknown";
-    if (message.method === "item/agentMessage/delta") {
+    const turnId = params.turnId || params.turn?.id || null;
+
+    // any protocol event for a turn refreshes its idle watchdog
+    if (turnId) {
       const wd = this.watchdogs.get(turnId);
       if (wd) wd.pulse();
+    }
+
+    if (message.method === "item/agentMessage/delta") {
+      if (!turnId) return;
+      this.sawDelta.add(turnId);
       this.turnText.set(turnId, `${this.turnText.get(turnId) || ""}${params.delta || ""}`);
+      return;
     }
     if (message.method === "item/completed" && params.item?.type === "agentMessage") {
+      // deltas already carry the full message; appending the completed item
+      // again would duplicate every sentence. Use it only when no delta streamed.
+      if (!turnId || this.sawDelta.has(turnId)) return;
       const text = textFromItem(params.item);
       if (text) this.turnText.set(turnId, `${this.turnText.get(turnId) || ""}${text}`);
+      return;
     }
     if (message.method === "turn/completed") {
       const wd = this.watchdogs.get(turnId);
@@ -207,7 +220,9 @@ export class CodexExecutor {
         turn: params.turn || null,
         text: this.turnText.get(turnId) || "",
       };
-      if (turnId && turnId !== "unknown") {
+      this.sawDelta.delete(turnId);
+      this.turnText.delete(turnId);
+      if (turnId) {
         this.completedTurns ??= new Map();
         this.completedTurns.set(turnId, completed);
         const waiter = this.turnWaiters.get(turnId);
@@ -216,6 +231,41 @@ export class CodexExecutor {
           clearTimeout(waiter.timer);
           waiter.resolve(completed);
         }
+      }
+      return;
+    }
+    if (message.method === "turn/failed") {
+      // fail fast instead of hanging until the fallback timeout
+      // (e.g. usageLimitExceeded ends the turn as failed, not as a hang)
+      const raw = params.error ?? params.message ?? "turn failed";
+      const msg = String(raw?.message || raw);
+      this._failTurn(turnId, Object.assign(new Error(msg), { code: "CODEX_TURN_FAILED", reason: "turn_failed" }));
+      return;
+    }
+    if (message.method === "error") {
+      const raw = params.error ?? params;
+      const msg = String(raw?.message || (typeof raw === "string" ? raw : JSON.stringify(raw)));
+      const ids = [...this.turnWaiters.keys()];
+      const target = turnId && this.turnWaiters.has(turnId)
+        ? turnId
+        : (!turnId && ids.length === 1 ? ids[0] : null);
+      if (target) {
+        this._failTurn(target, Object.assign(new Error(msg), { code: "CODEX_TURN_FAILED", reason: "server_error" }));
+      }
+    }
+  }
+
+  _failTurn(turnId, error) {
+    const wd = turnId ? this.watchdogs.get(turnId) : null;
+    if (wd) { wd.stop(); this.watchdogs.delete(turnId); }
+    if (turnId) {
+      this.sawDelta.delete(turnId);
+      this.turnText.delete(turnId);
+      const waiter = this.turnWaiters.get(turnId);
+      if (waiter) {
+        this.turnWaiters.delete(turnId);
+        clearTimeout(waiter.timer);
+        waiter.reject(error);
       }
     }
   }
@@ -229,6 +279,8 @@ export class CodexExecutor {
     this.state = "unavailable";
     for (const wd of this.watchdogs.values()) wd.stop();
     this.watchdogs.clear();
+    this.sawDelta.clear();
+    this.turnText.clear();
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(normalized); }
     this.pending.clear();
     for (const w of this.turnWaiters.values()) { clearTimeout(w.timer); w.reject(normalized); }
@@ -320,6 +372,8 @@ export class CodexExecutor {
     for (const w of this.turnWaiters.values()) clearTimeout(w.timer);
     this.pending.clear();
     this.turnWaiters.clear();
+    this.sawDelta.clear();
+    this.turnText.clear();
     try { this.child?.kill?.(); } catch {}
     this.child = null;
   }
