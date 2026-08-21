@@ -1,0 +1,17 @@
+{
+  "name": "web-pro-orchestrator",
+  "version": "0.1.0",
+  "description": "Codex plugin + CLI: drive web ChatGPT as a planning brain (chat quota) and Codex as executor (Codex quota) in a brain-hand loop.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "web-orchestrator": "./scripts/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "node scripts/cli.mjs"
+  }
+}

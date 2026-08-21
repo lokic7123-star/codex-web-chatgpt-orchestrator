@@ -1,0 +1,22 @@
+{
+  "name": "web-orchestrator",
+  "version": "0.1.0",
+  "description": "CLI + skill: drive web ChatGPT as a planning brain while a local Codex worker executes tasks.",
+  "author": {
+    "name": "web-pro-orchestrator contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Web Pro Orchestrator",
+    "shortDescription": "Web ChatGPT plans, Codex executes (CLI + skill, no MCP).",
+    "longDescription": "Uses CDP against a user-visible Chrome/Edge window with a dedicated profile to drive web ChatGPT (brain, chat quota) and a codex app-server worker (hand, Codex quota) in a bounded brain-hand loop. Exposed as a CLI (`web-orchestrator`) and a Codex skill. No API keys, no cookie reading, no CAPTCHA bypass; sign in manually.",
+    "developerName": "web-pro-orchestrator",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "CLI"],
+    "brandColor": "#10A37F",
+    "defaultPrompt": [
+      "Use the web-orchestrator CLI (via skill) to run one bounded brain-to-Codex round.",
+      "Web ChatGPT plans; Codex executes."
+    ]
+  }
+}
