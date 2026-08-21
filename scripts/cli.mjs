@@ -10,16 +10,23 @@
 //   run  --goal <g> [--max-rounds n] [--cwd d]   full brain-hand loop
 //   run-multi --spec <plan.json>                 N parallel brain-hand loops
 //   sessions                    list registered orchestration sessions
+//   doctor                      environment self-check (node/cdp/codex/store)
 //   status                      runner state
 // Logs go to stderr; results to stdout (so results can be piped/parsed).
 
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { accessSync, constants as fsConstants } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { CdpClient, BrainSession, DEFAULT_PORT } from "../src/browser/cdp.mjs";
 import { createBrainAdapter } from "../src/orchestration/brain_adapter.mjs";
-import { createExecutorAdapter } from "../src/orchestration/executor_adapter.mjs";
+import { createExecutorAdapter, readCodexConfigSnapshot } from "../src/orchestration/executor_adapter.mjs";
 import { createRunner, newState } from "../src/orchestration/runner.mjs";
 import { createSessionManager } from "../src/orchestration/session_manager.mjs";
-import { normalizeEntries, runParallelSessions } from "../src/orchestration/multi.mjs";
+import { normalizeEntries, runParallelSessions, validateAllowedCwds } from "../src/orchestration/multi.mjs";
+
+const execFileP = promisify(execFile);
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -44,9 +51,70 @@ function getSession() {
   return new BrainSession({ client: new CdpClient({ port }), providerId: "chatgpt" });
 }
 
+async function runDoctor() {
+  const checks = [];
+  const add = (name, ok, detail) => checks.push({ name, ok: Boolean(ok), detail: String(detail ?? "").slice(0, 200) });
+
+  // node version
+  const major = Number(process.versions.node.split(".")[0]);
+  add("node>=22", major >= 22, `node ${process.versions.node}`);
+
+  // codex CLI available
+  try {
+    const { stdout } = await execFileP("cmd", ["/c", "codex", "--version"], { timeout: 15000, windowsHide: true });
+    add("codex CLI", true, stdout.trim().split(/\r?\n/)[0]);
+  } catch (e) {
+    add("codex CLI", false, e.message);
+  }
+
+  // frozen-config readability
+  const snap = readCodexConfigSnapshot();
+  add("codex config model", Boolean(snap.model), snap.model || "not set in ~/.codex/config.toml");
+
+  // browser / CDP endpoint
+  const port = Number(process.env.WEB_PRO_PORT || DEFAULT_PORT);
+  let cdpOk = false;
+  let browserDetail = "";
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+    const v = await res.json();
+    cdpOk = res.ok;
+    browserDetail = v.Browser || "unknown";
+  } catch (e) {
+    browserDetail = `${e.message} — launch the dedicated browser first (README setup step 1)`;
+  }
+  add(`CDP :${port}`, cdpOk, browserDetail);
+
+  // brain page: logged in + composer usable
+  if (cdpOk) {
+    try {
+      const s = getSession();
+      const h = await s.healthCheck();
+      const names = (h.strategies || []).filter(x => x.input).map(x => x.name);
+      add("brain composer", Boolean(h.ok), names.join(", ") || "no input strategy ready");
+      s.client.close(); // release the DevTools websocket before exit
+    } catch (e) {
+      add("brain composer", false, e.message);
+    }
+  } else {
+    add("brain composer", false, "skipped: CDP not reachable");
+  }
+
+  // session registry store writable
+  try {
+    const mgr = createSessionManager();
+    accessSync(dirname(mgr.file), fsConstants.W_OK);
+    add("sessions store writable", true, mgr.file);
+  } catch (e) {
+    add("sessions store writable", false, e.message);
+  }
+
+  return { ok: checks.every(c => c.ok), port, checks };
+}
+
 async function main() {
   if (!cmd || cmd === "--help" || cmd === "-h") {
-    out({ usage: "web-orchestrator <turn|identity|health|list|select|run|run-multi|sessions|status>", note: "see source header for args" });
+    out({ usage: "web-orchestrator <turn|identity|health|list|select|run|run-multi|sessions|doctor|status>", note: "see source header for args" });
     process.exit(0);
   }
 
@@ -82,7 +150,7 @@ async function main() {
       if (!prompt) fail("turn requires a prompt argument (or --nonce)");
       const result = await s.brainTurn(prompt, { timeoutMs: Number(getFlag("timeout") || 120000) });
       out(result);
-      if (!result.ok) process.exit(1);
+      if (!result.ok) process.exitCode = 1;
       return;
     }
     case "run": {
@@ -118,6 +186,15 @@ async function main() {
       let spec;
       try { spec = JSON.parse(raw); } catch (e) { fail(`spec is not valid JSON: ${e.message}`); }
       const entries = normalizeEntries(spec);
+      // optional guardrail: spec.allowed_cwds or WEB_PRO_ALLOWED_CWDS (';' separated)
+      const allowed = Array.isArray(spec?.allowed_cwds)
+        ? spec.allowed_cwds
+        : String(process.env.WEB_PRO_ALLOWED_CWDS || "").split(";").map(s => s.trim()).filter(Boolean);
+      try {
+        validateAllowedCwds(entries, allowed);
+      } catch (e) {
+        fail(e.message);
+      }
       const mgr = createSessionManager();
       const results = await runParallelSessions({
         entries,
@@ -126,6 +203,10 @@ async function main() {
       });
       out({ results });
       if (results.some(r => r.status === "failed")) process.exitCode = 1;
+      return;
+    }
+    case "doctor": {
+      out(await runDoctor());
       return;
     }
     case "status": {
@@ -137,4 +218,6 @@ async function main() {
   }
 }
 
-main().then(() => process.exit(0)).catch(e => fail(e.message));
+// let the event loop drain naturally: forcing process.exit() while DevTools
+// websockets / child handles are still closing crashes libuv on Windows
+main().then(() => { process.exitCode = 0; }).catch(e => fail(e.message));

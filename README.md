@@ -74,6 +74,7 @@ Key design points:
 
 ```bash
 node scripts/cli.mjs health                 # browser + composer availability
+node scripts/cli.mjs doctor                 # full environment self-check (node/codex/CDP/brain/store)
 node scripts/cli.mjs identity               # current conversation identity
 node scripts/cli.mjs list --query <q>       # list visible conversations
 node scripts/cli.mjs select --title <t>     # select a conversation (or --id / --url)
@@ -91,11 +92,14 @@ node scripts/cli.mjs sessions                     # list registered sessions
 `run-multi` runs several isolated brain-hand loops concurrently. Each session gets its **own chatgpt.com tab** (never stealing another session's or your manual tabs), its own `codex app-server` child, and its own workspace directory:
 
 ```json
-[
-  { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10, "thread_rounds": 4 },
-  { "name": "docs", "goal": "Write README for the tools package", "cwd": "D:/work/repo2",
-    "conversation": { "title": "docs planner" } }
-]
+{
+  "allowed_cwds": ["D:/work"],
+  "sessions": [
+    { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10, "thread_rounds": 4, "worktree": true },
+    { "name": "docs", "goal": "Write README for the tools package", "cwd": "D:/work/repo2",
+      "conversation": { "title": "docs planner" } }
+  ]
+}
 ```
 
 ```bash
@@ -104,6 +108,8 @@ node scripts/cli.mjs run-multi --spec plan.json
 
 - Without `conversation`, each session starts a fresh ChatGPT conversation; with `conversation` (`title`, `id`, or `url`) it reuses an existing one.
 - **Resume by name**: re-running a spec with the same session `name` returns to that session's recorded conversation, rebinds to the tab already showing it — and **continues from the saved progress** (round, history, checkpoint). Add `"fresh": true` to an entry to deliberately start over.
+- **Worktree isolation** (`"worktree": true`): the worker edits its own `git worktree` under `~/.web-pro-orchestrator/worktrees/` on a `webpro/<session>` branch, so parallel sessions can safely share one repository. The worktree and branch are kept after the run — merging/removing is your call (the session result reminds you of both). Resume reuses the recorded worktree; `fresh: true` creates a new one. Requires the cwd to be a git repository.
+- **cwd whitelist** (`allowed_cwds` at spec top level, or `WEB_PRO_ALLOWED_CWDS` env var, `;`-separated): every session cwd must fall under one of the roots, protecting against a typo'd spec pointing the worker elsewhere.
 - **Thread rollover** (`thread_rounds`, optional): after N rounds on one executor thread, the brain summarizes progress into a checkpoint and the worker continues in a fresh thread seeded with it — long tasks don't drown the worker's context.
 - Session records (status, round, conversation identity, executor thread/generation) persist to `~/.codex/web-pro-orchestrator/sessions.json`; inspect anytime with `sessions`.
 - One session failing never takes the others down (`Promise.allSettled`).
@@ -116,6 +122,7 @@ node scripts/verify_executor.mjs <dir>    # M2: worker creates a proof file in <
 node scripts/verify_parallel.mjs [a|b]    # parallel sessions (a: live 2-tab turns, b: offline registry)
 node scripts/verify_rollover.mjs          # thread rollover + checkpoint seeding (offline)
 node scripts/verify_resume.mjs            # progress resume across invocations (offline)
+node scripts/verify_worktree.mjs          # worktree isolation + cwd whitelist (offline)
 node scripts/verify_codex_protocol.mjs    # executor JSON-RPC handling (offline)
 ```
 

@@ -35,3 +35,6 @@ jobs:
 
       - name: Progress resume (offline)
         run: node scripts/verify_resume.mjs
+
+      - name: Worktree isolation + cwd whitelist (offline)
+        run: node scripts/verify_worktree.mjs

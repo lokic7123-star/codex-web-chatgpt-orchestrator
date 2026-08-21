@@ -13,8 +13,10 @@
 import { CdpClient, BrainSession } from "../browser/cdp.mjs";
 import { createBrainAdapter } from "./brain_adapter.mjs";
 import { createExecutorAdapter } from "./executor_adapter.mjs";
+import { ensureWorktree } from "./worktree.mjs";
 import { TERMINAL_STATUSES } from "../../scripts/protocol.mjs";
 import { createRunner, newState } from "./runner.mjs";
+import { resolve, sep } from "node:path";
 
 const clipStr = (v, n) => String(v ?? "").slice(0, n);
 
@@ -91,10 +93,34 @@ export function normalizeEntries(spec) {
       max_rounds: maxRounds,
       thread_rounds: threadRounds,
       fresh: e.fresh === true,
+      worktree: e.worktree === true,
       constraints: Array.isArray(e.constraints) ? e.constraints.map(String) : [],
       conversation: e.conversation && typeof e.conversation === "object" ? e.conversation : null,
     };
   });
+}
+
+// Optional guardrail: every session cwd must fall under one of the allowed
+// roots (protects against a typo'd spec pointing the worker at system dirs).
+export function validateAllowedCwds(entries, allowedRoots) {
+  const roots = (Array.isArray(allowedRoots) ? allowedRoots : [])
+    .map(r => normPath(String(r || "")))
+    .filter(Boolean);
+  if (!roots.length) return;
+  for (const e of entries) {
+    const c = normPath(String(e.cwd));
+    const ok = roots.some(r => c === r || c.startsWith(r.endsWith(sep) ? r : r + sep));
+    if (!ok) {
+      throw new Error(`session "${e.name}": cwd "${e.cwd}" is outside allowed_cwds (${roots.join(", ")})`);
+    }
+  }
+}
+
+function normPath(p) {
+  if (!p) return "";
+  let r = resolve(p);
+  if (process.platform === "win32") r = r.toLowerCase();
+  return r.endsWith(sep) ? r.slice(0, -sep.length) : r;
 }
 
 export async function runParallelSessions({ entries, manager, port, onLog = null }) {
@@ -162,43 +188,61 @@ async function runOne({ entry, client, session, manager, log }) {
     conversation: session.identity,
   });
   log(`[${rec.name}] loop started (record ${rec.id})`);
-  const executor = createExecutorAdapter({ cwd: entry.cwd });
-
-  // progress resume: same name continues from the saved runner snapshot
-  // (round/history/checkpoint) unless spec sets fresh:true
-  let st;
-  const saved = entry.fresh ? null : rec?.state;
-  const restored = restoreRunnerState(saved, { goal: entry.goal, constraints: entry.constraints });
-  if (restored) {
-    st = restored;
-    st.maxRounds = Number.isInteger(entry.max_rounds) ? entry.max_rounds : (st.maxRounds ?? 20);
-    log(`[${rec.name}] resumed progress at round ${st.round} (generation ${st.executor_generation}, history ${st.history.length})`);
-  } else {
-    st = newState(entry.goal, entry.constraints);
-    if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;
-  }
-
-  const runner = createRunner({
-    getState: () => st,
-    setState: ns => { st = ns; },
-    brain: createBrainAdapter({ session }),
-    executor,
-    onEvent: ev => log(`[${rec.name}] ${ev.type}: ${ev.summary}`),
-    persist: async s => {
-      manager.upsert({
-        id: rec.id,
-        status: "running",
-        round: s.round,
-        executor_generation: s.executor_generation ?? 1,
-        conversation: session.identity,
-        executor_thread_id: executor.threadId,
-        state: snapshotRunnerState(s),
-      });
-    },
-  });
-
+  let executor = null;
+  let wt = null;
   try {
+    // worktree isolation (opt-in): the worker edits its own checkout; the
+    // original repository is never touched. Resume reuses a recorded
+    // worktree when it still exists; fresh:true forces a brand-new one.
+    let effectiveCwd = entry.cwd;
+    if (entry.worktree) {
+      wt = await ensureWorktree({
+        name: entry.name,
+        repoCwd: entry.cwd,
+        existingPath: entry.fresh ? null : (rec?.worktree_path ?? null),
+      });
+      effectiveCwd = wt.path;
+      log(`[${rec.name}] ${wt.reused ? "reusing" : "created"} worktree ${effectiveCwd} (${wt.branch})`);
+      manager.upsert({ id: rec.id, worktree_path: wt.path, worktree_branch: wt.branch });
+    }
+
+    const executor = createExecutorAdapter({ cwd: effectiveCwd });
+
+    // progress resume: same name continues from the saved runner snapshot
+    // (round/history/checkpoint) unless spec sets fresh:true
+    let st;
+    const saved = entry.fresh ? null : rec?.state;
+    const restored = restoreRunnerState(saved, { goal: entry.goal, constraints: entry.constraints });
+    if (restored) {
+      st = restored;
+      st.maxRounds = Number.isInteger(entry.max_rounds) ? entry.max_rounds : (st.maxRounds ?? 20);
+      log(`[${rec.name}] resumed progress at round ${st.round} (generation ${st.executor_generation}, history ${st.history.length})`);
+    } else {
+      st = newState(entry.goal, entry.constraints);
+      if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;
+    }
+
+    const runner = createRunner({
+      getState: () => st,
+      setState: ns => { st = ns; },
+      brain: createBrainAdapter({ session }),
+      executor,
+      onEvent: ev => log(`[${rec.name}] ${ev.type}: ${ev.summary}`),
+      persist: async s => {
+        manager.upsert({
+          id: rec.id,
+          status: "running",
+          round: s.round,
+          executor_generation: s.executor_generation ?? 1,
+          conversation: session.identity,
+          executor_thread_id: executor.threadId,
+          state: snapshotRunnerState(s),
+        });
+      },
+    });
+
     const result = await runner.runUntilStop({ thread_rounds: entry.thread_rounds });
+    const baseSummary = String(result.reason || result.review?.reason || "").slice(0, 400);
     manager.upsert({
       id: rec.id,
       status: result.status || "unknown",
@@ -209,7 +253,7 @@ async function runOne({ entry, client, session, manager, log }) {
       executor_thread_id: executor.threadId,
       // a terminal reason is not necessarily an error; only failures are
       last_error: result.status === "failed" ? String(result.reason || "").slice(0, 500) : null,
-      result_summary: String(result.reason || result.review?.reason || "").slice(0, 500) || null,
+      result_summary: (baseSummary + (wt ? ` [merge branch ${wt.branch}, then remove worktree: git worktree remove --force "${wt.path}"]` : "")).slice(0, 500) || null,
     });
     log(`[${rec.name}] finished: ${result.status}`);
     return {
@@ -218,6 +262,7 @@ async function runOne({ entry, client, session, manager, log }) {
       status: result.status,
       rounds_run: result.rounds_run,
       reason: result.reason || result.review?.reason || null,
+      worktree: wt ? { path: wt.path, branch: wt.branch } : null,
     };
   } catch (error) {
     const msg = String(error?.message || error);
@@ -226,12 +271,13 @@ async function runOne({ entry, client, session, manager, log }) {
       status: "failed",
       last_error: msg.slice(0, 500),
       conversation: session.identity,
-      executor_thread_id: executor.threadId,
+      executor_thread_id: executor?.threadId ?? null,
     });
     log(`[${rec.name}] failed: ${msg}`);
     return { name: rec.name, id: rec.id, stopped: true, status: "failed", reason: msg };
   } finally {
-    try { await executor.close(); } catch {}
+    try { if (executor) await executor.close(); } catch {}
     try { client.close(); } catch {}
+    if (wt) log(`[${rec.name}] worktree kept for review/merge: ${wt.path} (branch ${wt.branch})`);
   }
 }

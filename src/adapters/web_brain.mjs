@@ -182,12 +182,16 @@ function makeChatgptProvider({ evaluate, providerId = "chatgpt" } = {}) {
           const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
           return sendTerms.some(t => label.includes(t.toLowerCase()));
         });
-        const strategies = inputSelectors.map((s, i) => ({
-          name: inputNames[i] || ('input-' + i),
-          input: s,
-          send: Boolean(document.querySelector(s) && (sendSelectors.some(x => document.querySelector(x)) || sendByLabel)),
-        }));
-        return { ok: strategies.some(x => x.send), strategies };
+        // healthy = a composer EXISTS. The send button only renders once the
+        // draft is non-empty (voice button replaces it on idle conversations),
+        // so its presence is informational, not part of the verdict — the
+        // send flow polls for it after filling anyway.
+        const strategies = inputSelectors.map((s, i) => {
+          const input = Boolean(document.querySelector(s));
+          const sendNow = input && (sendSelectors.some(x => document.querySelector(x)) || sendByLabel);
+          return { name: inputNames[i] || ('input-' + i), input, sendNow };
+        });
+        return { ok: strategies.some(x => x.input), strategies };
       })()`);
     },
 
