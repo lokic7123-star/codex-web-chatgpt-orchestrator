@@ -5,17 +5,17 @@ import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const suites = [
-  "verify_codex_protocol.mjs",
-  "verify_parallel.mjs",   // part b only (offline)
-  "verify_rollover.mjs",
-  "verify_resume.mjs",
-  "verify_worktree.mjs",
+  ["verify_codex_protocol.mjs"],
+  ["verify_parallel.mjs", "b"],   // part b only (offline) — part a hits real chatgpt.com
+  ["verify_rollover.mjs"],
+  ["verify_resume.mjs"],
+  ["verify_worktree.mjs"],
 ];
 
 let failed = 0;
-for (const suite of suites) {
-  console.log(`\n== ${suite}`);
-  const r = spawnSync(process.execPath, [join(root, "scripts", suite)], { stdio: "inherit" });
+for (const [suite, ...args] of suites) {
+  console.log(`\n== ${suite} ${args.join(" ")}`.trimEnd());
+  const r = spawnSync(process.execPath, [join(root, "scripts", suite), ...args], { stdio: "inherit" });
   if (r.status !== 0) failed += 1;
 }
 

@@ -59,6 +59,27 @@ const failing = buildExecutorEvidence({ plan, text: "tests failed", isError: tru
 const gateFail = enforceAcceptanceGate({ status: "completed" }, plan.acceptance, failing);
 check("B5 failed execution blocks completion", gateFail.decision.status === "blocked");
 
+// D: review veto (audit N2) — merged evidence sources
+const workerPass = buildExecutorEvidence({ plan, text: "all done", isError: false });
+const reviewVeto = enforceAcceptanceGate(
+  { status: "completed", reason: "done" },
+  plan.acceptance,
+  [
+    ...workerPass,
+    { acceptance_id: "A1", type: "review_check", summary: "tests actually fail", pass: false },
+  ],
+);
+check("D1 review pass:false vetoes worker self-report", reviewVeto.decision.status === "blocked");
+const reviewConfirm = enforceAcceptanceGate(
+  { status: "completed", reason: "done" },
+  plan.acceptance,
+  [
+    ...workerPass,
+    { acceptance_id: "A1", type: "review_check", summary: "verified locally", pass: true },
+  ],
+);
+check("D2 review confirmation keeps completed standing", reviewConfirm.decision.status === "completed");
+
 // normalizeStatus boundaries (both copies)
 for (const [label, fn] of [["C1 runner", runnerNormalize], ["C2 protocol", protocolNormalize]]) {
   check(`${label} 'not done yet' != completed`, fn("not done yet") !== "completed");

@@ -3,25 +3,11 @@
 // enforces the acceptance gate and stop policy. Executor watchdog is the
 // caller's responsibility (CodexExecutor), surfaced here as awaiting_user/failed.
 
-import { TERMINAL_STATUSES } from "../../scripts/protocol.mjs";
+import { TERMINAL_STATUSES, normalizeStatus } from "../../scripts/protocol.mjs";
 import { enforceAcceptanceGate } from "./acceptance.mjs";
 import { fingerprint, DEFAULT_MAX_ROUNDS, HARD_MAX_ROUNDS, maxRoundsOf, roundLimitReached } from "./stop_policy.mjs";
 
-export { DEFAULT_MAX_ROUNDS, HARD_MAX_ROUNDS };
-
-export function normalizeStatus(value, text = "") {
-  // word-boundary matching, and negated phrases stripped first:
-  // "not done yet" must NOT read as done
-  const s = String(value || "").toLowerCase();
-  const positive = s.replace(/\b(?:not|never|hardly|barely|isn'?t|wasn'?t|aren'?t|weren'?t|don'?t|doesn'?t|didn'?t|haven'?t|hasn'?t|won'?t|can'?t|cannot)\b[^.,;]*/g, " ");
-  if (/\bcompleted?\b|\bdone\b|\bfinished\b|\bsuccess\b/.test(positive)) return "completed";
-  if (/\bblocked?\b|无法继续|被阻塞/.test(s)) return "blocked";
-  if (/\brepeat(?:ed|ing)?\b|重复|循环/.test(s)) return "repeated";
-  if (/\bawaiting(?:_user)?\b|\bapproval\b/.test(s)) return "awaiting_user";
-  if (/\bmax[_ -]?rounds?\b/.test(s)) return "max_rounds";
-  if (/\bfailed?\b|\berror\b/.test(s)) return "failed";
-  return "continue";
-}
+export { DEFAULT_MAX_ROUNDS, HARD_MAX_ROUNDS, normalizeStatus };
 
 function list(value) {
   if (value === undefined || value === null || value === "") return [];
@@ -196,8 +182,16 @@ export function createRunner({
     if (reviewErr) return stop(state, { status: "blocked", round, max_rounds: state.maxRounds, stage: "review", reason: reviewErr.message });
     let review = structured(reviewResult);
 
-    // acceptance gate: completed requires all mandatory acceptance + passing evidence
-    const gate = enforceAcceptanceGate(review, plan.acceptance, report.evidence);
+    // acceptance gate: completed requires all mandatory acceptance + passing evidence.
+    // Evidence sources are MERGED: the executor report (self-reported) plus the
+    // brain review's own evidence items — a review pass:false vetoes a criterion
+    // the worker claimed to satisfy (audit N2: self-declared passes alone must
+    // not be the last line of defense).
+    const mergedEvidence = [
+      ...(Array.isArray(report.evidence) ? report.evidence : []),
+      ...(Array.isArray(review.evidence) ? review.evidence : []),
+    ];
+    const gate = enforceAcceptanceGate(review, plan.acceptance, mergedEvidence);
     review = { ...review, ...gate.decision, completion_proof: gate.gate };
     state.latestReview = review;
     if (review.status === "completed" && !gate.gate.proven) {

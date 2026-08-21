@@ -56,8 +56,12 @@ export function evaluateAcceptanceGate({ acceptance = [], evidence = [] } = {}) 
       missing.push(c);
       continue;
     }
-    const pass = matches.some(e => e.pass);
-    if (!pass) failed.push(c);
+    // strict: at least one passing item AND no explicit failure. A single
+    // pass:false (e.g. the brain's review vetoing a criterion the worker
+    // claimed to satisfy) outweighs any number of self-reported passes.
+    const hasPass = matches.some(e => e.pass);
+    const hasFail = matches.some(e => e.pass === false);
+    if (!hasPass || hasFail) failed.push(c);
   }
 
   const mandatoryMet = mandatory.length - missing.length - failed.length;
