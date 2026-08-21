@@ -38,10 +38,10 @@ Run from the project root (`web-pro-orchestrator` checkout):
 
 ## Key semantics
 
-- **Atomic brain turn** (`turn`): sends a prompt, waits for the exact new reply, and rejects stray/stale messages via a before-count + content-hash baseline.
-- **Acceptance gate**: a run reaches `completed` only when every mandatory acceptance criterion has a passing evidence item. Missing/failed evidence downgrades to `blocked`.
-- **Watchdog**: the Codex worker turn has a hard and an idle timeout; on timeout it interrupts, then kills the app-server child, then marks the route `blocked`. It never auto-approves.
-- **awaiting_user**: approval/interaction requests stop the run in an `awaiting_user` state (not a failure); the user resolves it, then resumes.
+- **Atomic brain turn** (`turn`): sends a prompt, waits for the exact new reply, and rejects stray/stale messages via a before-count baseline plus per-turn conversation-identity checks.
+- **Acceptance gate**: a run reaches `completed` only when every mandatory acceptance criterion has a passing evidence item mapped by id from the executor report; missing/failed evidence downgrades to `blocked`.
+- **Watchdog**: the Codex worker turn has a hard and an idle timeout; on timeout it interrupts, then kills the app-server child, then fails the round as `failed`. It never auto-approves.
+- **awaiting_user**: approval requests stop the run in an `awaiting_user` state with the request details surfaced in logs and the session record; nothing is ever auto-approved.
 - **Parallel sessions** (`run-multi`): each session binds an exclusive chatgpt.com tab (never steals other tabs), its own codex app-server child and workspace; one session failing does not affect the others. Same `name` = same conversation on later runs.
 - **Thread rollover** (`thread_rounds` in spec): after N rounds the brain compresses progress into a checkpoint and the worker continues in a fresh executor thread seeded with it — prevents long tasks from drowning worker context.
 

@@ -12,7 +12,7 @@
     "web-orchestrator": "./scripts/cli.mjs"
   },
   "scripts": {
-    "test": "node --test tests/",
+    "test": "node scripts/run-tests.mjs",
     "start": "node scripts/cli.mjs"
   }
 }

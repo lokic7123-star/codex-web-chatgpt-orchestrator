@@ -36,10 +36,10 @@ ChatGPT subscription **chat quota** and **Codex quota** are separate pools. Heav
 
 Key design points:
 
-- **Atomic brain turn** — every prompt to web ChatGPT records a baseline (message count + content hash) and only accepts a reply that is *provably new* for this turn. No stray/stale message confusion.
-- **Acceptance-driven completion** — the brain's plan carries structured acceptance criteria (`A1`, `A2`, …); a run may only reach `completed` when every mandatory criterion has matching passing evidence. Claimed-but-unproven completion is downgraded to `blocked`.
-- **Executor watchdog** — worker turns run under hard + idle timeouts; on timeout the turn is interrupted, then the app-server child is killed, then the route is marked `blocked`. Never auto-retries.
-- **Human-in-the-loop approvals** — approval requests surface as an `awaiting_user` state (not an error); nothing is ever auto-approved.
+- **Atomic brain turn** — every prompt to web ChatGPT records a baseline (assistant message count) and only accepts a reply that is *provably new* for this turn, with per-turn conversation-identity checks. No stray/stale message confusion.
+- **Acceptance-driven completion** — the brain's plan carries structured acceptance criteria (`A1`, `A2`, …); executor evidence is mapped onto those ids, and a run may only reach `completed` when every mandatory criterion has matching passing evidence. Claimed-but-unproven completion is downgraded to `blocked`.
+- **Executor watchdog** — worker turns run under hard + idle timeouts; on timeout the turn is interrupted, then the app-server child is killed, then the round fails as `failed`. Never auto-retries.
+- **Human-in-the-loop approvals** — approval requests surface as an `awaiting_user` state (not an error) with the request details in logs and the session record; nothing is ever auto-approved.
 - **Schema gate** — all brain output goes through JSON extraction → schema validation → one repair attempt → fail. The brain is never blindly trusted.
 - **Stable identity** — conversations are identified by `provider + conversation_id`; browser tab targets are transient and rebound automatically.
 

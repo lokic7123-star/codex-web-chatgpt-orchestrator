@@ -63,6 +63,9 @@ function makeChatgptProvider({ evaluate, providerId = "chatgpt" } = {}) {
           input.dispatchEvent(new Event('input', { bubbles: true }));
           filled = input.value || '';
         } else {
+          // selectAll first: a refill must REPLACE the draft, not append to it
+          // (the composer was already focused above)
+          document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, value);
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));

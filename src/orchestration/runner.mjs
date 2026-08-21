@@ -5,19 +5,21 @@
 
 import { TERMINAL_STATUSES } from "../../scripts/protocol.mjs";
 import { enforceAcceptanceGate } from "./acceptance.mjs";
-import { fingerprint } from "./stop_policy.mjs";
+import { fingerprint, DEFAULT_MAX_ROUNDS, HARD_MAX_ROUNDS, maxRoundsOf, roundLimitReached } from "./stop_policy.mjs";
 
-export const DEFAULT_MAX_ROUNDS = 20;
-export const HARD_MAX_ROUNDS = 50;
+export { DEFAULT_MAX_ROUNDS, HARD_MAX_ROUNDS };
 
 export function normalizeStatus(value, text = "") {
-  const s = String(value || text || "").toLowerCase();
-  if (/completed|complete|done|finished|success/.test(s)) return "completed";
-  if (/blocked|blocker|无法继续|被阻塞/.test(s)) return "blocked";
-  if (/repeated|repeat|loop|重复|循环/.test(s)) return "repeated";
-  if (/awaiting|approval/.test(s)) return "awaiting_user";
-  if (/max[_ -]?round|轮数上限/.test(s)) return "max_rounds";
-  if (/failed|fail/.test(s)) return "failed";
+  // word-boundary matching, and negated phrases stripped first:
+  // "not done yet" must NOT read as done
+  const s = String(value || "").toLowerCase();
+  const positive = s.replace(/\b(?:not|never|hardly|barely|isn'?t|wasn'?t|aren'?t|weren'?t|don'?t|doesn'?t|didn'?t|haven'?t|hasn'?t|won'?t|can'?t|cannot)\b[^.,;]*/g, " ");
+  if (/\bcompleted?\b|\bdone\b|\bfinished\b|\bsuccess\b/.test(positive)) return "completed";
+  if (/\bblocked?\b|无法继续|被阻塞/.test(s)) return "blocked";
+  if (/\brepeat(?:ed|ing)?\b|重复|循环/.test(s)) return "repeated";
+  if (/\bawaiting(?:_user)?\b|\bapproval\b/.test(s)) return "awaiting_user";
+  if (/\bmax[_ -]?rounds?\b/.test(s)) return "max_rounds";
+  if (/\bfailed?\b|\berror\b/.test(s)) return "failed";
   return "continue";
 }
 
@@ -88,21 +90,20 @@ function taskFingerprint(plan, workspace) {
 export function createRunner({
   getState = null,
   setState = null,
-  brain = null,        // { plan(), report(), review() }
+  brain = null,        // { plan(), review() [, report()] — report is optional }
   executor = null,     // { execute(task, plan) -> {text, evidence, status} }
   workspace = null,    // optional workspace fingerprint provider
-  maxRoundsOf = v => { const n = Number(v ?? DEFAULT_MAX_ROUNDS); return Number.isInteger(n) && n >= 1 ? Math.min(n, HARD_MAX_ROUNDS) : DEFAULT_MAX_ROUNDS; },
-  roundLimitReached = null,
+  roundLimitReached: customRoundLimit = null,
   onEvent = null,
   persist = null,
 } = {}) {
-  if (!brain?.plan || !brain?.report || !brain?.review || !executor?.execute) {
-    throw new TypeError("runner requires brain {plan,report,review} and executor {execute}");
+  if (!brain?.plan || !brain?.review || !executor?.execute) {
+    throw new TypeError("runner requires brain {plan,review} and executor {execute}");
   }
   if (!getState || !setState) throw new TypeError("runner requires getState/setState");
 
   let state = getState();
-  roundLimitReached = roundLimitReached || ((round, max) => Number(round) >= max - 1);
+  const limitReached = customRoundLimit || roundLimitReached;
 
   async function emit(type, summary, data) {
     if (typeof onEvent === "function") await onEvent({ type, summary, data });
@@ -181,10 +182,13 @@ export function createRunner({
     const report = structured(execResult);
     state.latestReport = report;
 
-    // 3. report to brain
-    const reportResult = await brain.report({ ...args, round, plan, report, report_text: resultText(execResult) || report?.summary || "" });
-    const reportErr = resultError(reportResult);
-    if (reportErr) return stop(state, { status: "blocked", round, max_rounds: state.maxRounds, stage: "report", reason: reportErr.message });
+    // 3. report to brain — OPTIONAL: the review prompt already carries the
+    // report, so skipping this saves one chat-quota turn per round
+    if (typeof brain.report === "function") {
+      const reportResult = await brain.report({ ...args, round, plan, report, report_text: resultText(execResult) || report?.summary || "" });
+      const reportErr = resultError(reportResult);
+      if (reportErr) return stop(state, { status: "blocked", round, max_rounds: state.maxRounds, stage: "report", reason: reportErr.message });
+    }
 
     // 4. review
     const reviewResult = await brain.review({ ...args, round, plan, report, report_text: resultText(execResult) });
@@ -217,7 +221,7 @@ export function createRunner({
       await save();
       return { stopped: true, status: review.status, round, max_rounds: state.maxRounds, review, report, stage: "review" };
     }
-    if (roundLimitReached(round, state.maxRounds)) {
+    if (limitReached(round, state.maxRounds)) {
       review = { ...review, status: "max_rounds", reason: `max rounds reached: ${state.maxRounds}` };
       state.latestReview = review;
       return stop(state, { status: "max_rounds", round, max_rounds: state.maxRounds, review, report, stage: "stop_policy", reason: review.reason });

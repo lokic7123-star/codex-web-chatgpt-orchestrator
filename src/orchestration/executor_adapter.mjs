@@ -3,26 +3,47 @@
 // Returns structured evidence consumed by the acceptance gate.
 
 import { CodexExecutor } from "../adapters/codex.mjs";
-import { freezeExecutorSnapshot, getExecutorProvider, executorModelOf } from "../adapters/executor_provider.mjs";
+import { freezeExecutorSnapshot } from "../adapters/executor_provider.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Read the live ~/.codex/config.toml model/reasoning so codex_current can freeze it.
+// Section-aware: only TOP-LEVEL keys count (a `model=` inside [profile.x] must
+// not leak into the frozen snapshot).
 export function readCodexConfigSnapshot() {
   const p = join(homedir(), ".codex", "config.toml");
   const out = { model: null, reasoning_effort: null, service_tier: null };
   if (!existsSync(p)) return out;
   try {
-    const text = readFileSync(p, "utf8");
-    const m = text.match(/^model\s*=\s*"([^"]+)"/m);
-    const r = text.match(/^model_reasoning_effort\s*=\s*"([^"]+)"/m);
-    const s = text.match(/^service_tier\s*=\s*"([^"]+)"/m);
-    if (m) out.model = m[1];
-    if (r) out.reasoning_effort = r[1];
-    if (s) out.service_tier = s[1];
+    let section = "";
+    for (const rawLine of readFileSync(p, "utf8").split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const sec = line.match(/^\[+([^\]]+)\]+$/);
+      if (sec) { section = sec[1].trim().toLowerCase(); continue; }
+      if (section) continue;
+      const kv = line.match(/^(model|model_reasoning_effort|service_tier)\s*=\s*"([^"]*)"/);
+      if (!kv) continue;
+      const key = kv[1] === "model_reasoning_effort" ? "reasoning_effort" : kv[1];
+      if (out[key] == null) out[key] = kv[2] || null;
+    }
   } catch {}
   return out;
+}
+
+/**
+ * Map the worker's raw output onto the plan's acceptance criteria so the
+ * acceptance gate can match evidence ids. The worker's own success flag sets
+ * pass; the brain's review still independently judges completion on top.
+ */
+export function buildExecutorEvidence({ plan = null, text = "", isError = false } = {}) {
+  const summary = String(text ?? "").slice(0, 2000);
+  const pass = !isError;
+  const raw = Array.isArray(plan?.acceptance) ? plan.acceptance : [];
+  const ids = raw.map((a, i) => (typeof a === "string" ? `A${i + 1}` : String(a?.id || `A${i + 1}`)));
+  if (!ids.length) return [{ acceptance_id: "", type: "executor_text", summary, pass }];
+  return ids.map(id => ({ acceptance_id: id, type: "executor_text", summary, pass }));
 }
 
 export function createExecutorAdapter({
@@ -36,6 +57,15 @@ export function createExecutorAdapter({
   let executor = null;
   let activeSnapshot = snapshot;
   let threadId = null;
+  let pendingApproval = null;
+
+  const summarizeApproval = req => {
+    try {
+      return `${req.method || "approval"} ${JSON.stringify(req.params || {}).slice(0, 260)}`;
+    } catch {
+      return String(req?.method || "approval");
+    }
+  };
 
   async function ensureExecutor() {
     if (executor) return;
@@ -43,16 +73,14 @@ export function createExecutorAdapter({
       activeSnapshot = await freezeExecutorSnapshot({ resolveSnapshot: resolveSnapshot || readCodexConfigSnapshot });
     }
     const model = activeSnapshot.resolved.model;
-    const profile = activeSnapshot.resolved.profile;
-    const args = getExecutorProvider(activeSnapshot.provider).id === "codex_current" || !profile
-      ? ["app-server", "--listen", "stdio://"]
-      : ["-p", profile, "app-server", "--listen", "stdio://"];
+    const args = ["app-server", "--listen", "stdio://"];
     executor = new CodexExecutor({
       args,
       cwd,
       timeoutMs,
       idleMs,
       onApproval: req => {
+        pendingApproval = summarizeApproval(req);
         if (typeof onApproval === "function") onApproval(req);
       },
     });
@@ -74,6 +102,7 @@ export function createExecutorAdapter({
 
     async execute({ task, text, plan, round, timeout_ms, effort }) {
       const tid = await ensureExecutor();
+      pendingApproval = null;
       try {
         const result = await executor.sendTask({
           thread_id: tid,
@@ -83,25 +112,30 @@ export function createExecutorAdapter({
           model: activeSnapshot.resolved.model || undefined,
           effort,
         });
-        // compile structured evidence from the worker's text
+        // compile structured evidence from the worker's text, mapped onto the
+        // plan's acceptance ids so the acceptance gate can match them
         return {
           content: [{ type: "text", text: result.text || "" }],
           structuredContent: {
             status: "done",
             changes: extractChanges(result.text),
             tests: extractTests(result.text),
-            evidence: [{ acceptance_id: "", type: "executor_text", summary: String(result.text || "").slice(0, 2000), pass: true }],
+            evidence: buildExecutorEvidence({ plan, text: result.text || "", isError: false }),
             summary: String(result.text || "").slice(0, 6000),
           },
         };
       } catch (error) {
         const code = error.code || "";
+        const isApproval = /approval|permission/i.test(String(error.message || ""));
         const status = code.includes("TIMEOUT") ? "failed"
-          : (String(error.message).match(/approval|permission/i) ? "awaiting_user" : "blocked");
+          : (isApproval ? "awaiting_user" : "blocked");
+        const reason = isApproval && pendingApproval
+          ? `${error.message} [approval request: ${pendingApproval}]`
+          : error.message;
         return {
           isError: true,
-          content: [{ type: "text", text: error.message }],
-          structuredContent: { status, code, reason: error.message },
+          content: [{ type: "text", text: reason }],
+          structuredContent: { status, code, reason, approval: isApproval ? pendingApproval : undefined },
         };
       }
     },

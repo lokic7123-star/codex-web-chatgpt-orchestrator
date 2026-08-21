@@ -31,9 +31,14 @@ const execFileP = promisify(execFile);
 const args = process.argv.slice(2);
 const cmd = args[0];
 
+class FailError extends Error {}
+
+// no forced process.exit here: set the exit code and throw — the top-level
+// handler prints nothing extra for FailError (message already shown)
 function fail(msg) {
+  process.exitCode = 1;
   process.stderr.write(`error: ${msg}\n`);
-  process.exit(1);
+  throw new FailError(msg);
 }
 function out(obj) {
   process.stdout.write(`${JSON.stringify(obj, null, 2)}\n`);
@@ -156,9 +161,22 @@ async function main() {
     case "run": {
       const goal = getFlag("goal");
       if (!goal) fail("run requires --goal");
+      const cwd = getFlag("cwd") || process.cwd();
+      // same guardrail as run-multi (env-based, since there is no spec file)
+      const allowed = String(process.env.WEB_PRO_ALLOWED_CWDS || "").split(";").map(s => s.trim()).filter(Boolean);
+      try {
+        validateAllowedCwds([{ name: "run", cwd }], allowed);
+      } catch (e) {
+        fail(e.message);
+      }
       const session = getSession();
       const brain = createBrainAdapter({ session });
-      const executor = createExecutorAdapter({ cwd: getFlag("cwd") || process.cwd() });
+      const executor = createExecutorAdapter({
+        cwd,
+        onApproval: req => {
+          try { process.stderr.write(`[approval required] ${req.method || "approval"} ${JSON.stringify(req.params || {}).slice(0, 260)}\n`); } catch {}
+        },
+      });
       let st = newState(goal, []);
       const runner = createRunner({
         getState: () => st,
@@ -168,9 +186,12 @@ async function main() {
         onEvent: ev => process.stderr.write(`[event] ${ev.type} ${ev.summary}\n`),
       });
       if (getFlag("max-rounds")) st.maxRounds = Number(getFlag("max-rounds"));
-      const result = await runner.runUntilStop({});
-      out(result);
-      await executor.close();
+      try {
+        const result = await runner.runUntilStop({});
+        out(result);
+      } finally {
+        await executor.close(); // no orphan codex app-server on errors
+      }
       return;
     }
     case "sessions": {
@@ -220,4 +241,9 @@ async function main() {
 
 // let the event loop drain naturally: forcing process.exit() while DevTools
 // websockets / child handles are still closing crashes libuv on Windows
-main().then(() => { process.exitCode = 0; }).catch(e => fail(e.message));
+main().then(() => { process.exitCode = 0; }).catch(e => {
+  if (!(e instanceof FailError)) {
+    process.exitCode = 1;
+    process.stderr.write(`error: ${e.message}\n`);
+  }
+});

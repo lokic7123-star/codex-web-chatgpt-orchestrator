@@ -74,16 +74,22 @@ export async function removeWorktree(worktreePath, { force = false, repoCwd = nu
   if (force) args.push("--force");
   args.push(target);
   const cwd = repoCwd ? resolve(repoCwd) : target;
+  // without --force a dirty worktree is refused by git — that refusal is
+  // deterministic, so retrying is pointless and the fs fallback below must
+  // NEVER run: uncommitted changes must not be silently destroyed.
+  const attempts = force ? 3 : 1;
   let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       await git(args, cwd);
       return;
     } catch (error) {
       lastError = error;
+      if (!force) break;
       await sleep(150 * (attempt + 1));
     }
   }
+  if (force !== true) throw lastError;
   rmSync(target, { recursive: true, force: true });
   if (!existsSync(target)) {
     if (repoCwd) {

@@ -225,10 +225,17 @@ export class CodexExecutor {
       if (turnId) {
         this.completedTurns ??= new Map();
         this.completedTurns.set(turnId, completed);
+        // bound the cache: resolved waiters consume their entry immediately,
+        // only late-polling turns need it, and old entries must not pile up
+        if (this.completedTurns.size > 50) {
+          const oldest = this.completedTurns.keys().next().value;
+          this.completedTurns.delete(oldest);
+        }
         const waiter = this.turnWaiters.get(turnId);
         if (waiter) {
           this.turnWaiters.delete(turnId);
           clearTimeout(waiter.timer);
+          this.completedTurns.delete(turnId);
           waiter.resolve(completed);
         }
       }
@@ -315,7 +322,9 @@ export class CodexExecutor {
     if (!turnId) return { ...reqResult, thread_id, completed: false, text: "", watchdog: null };
 
     if (this.completedTurns?.has(turnId)) {
-      return { ...reqResult, ...this.completedTurns.get(turnId), completed: true, watchdog: null };
+      const cached = this.completedTurns.get(turnId);
+      this.completedTurns.delete(turnId); // consume the cached entry
+      return { ...reqResult, ...cached, completed: true, watchdog: null };
     }
 
     const watchdog = new TurnWatchdog({
@@ -345,6 +354,9 @@ export class CodexExecutor {
     const completion = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.turnWaiters.delete(turnId);
+        // the fallback timeout must also disarm this turn's watchdog
+        const wd = this.watchdogs.get(turnId);
+        if (wd) { wd.stop(); this.watchdogs.delete(turnId); }
         reject(Object.assign(new Error("turn timed out"), { code: "CODEX_TURN_TIMEOUT" }));
       }, timeoutMs + 30000);
       this.turnWaiters.set(turnId, { resolve, reject, timer });

@@ -17,6 +17,11 @@ export const BRAIN_IDLE_TIMEOUT_MS = 45000;
 
 export class CdpClient {
   constructor({ port = DEFAULT_PORT, endpointHost = "127.0.0.1" } = {}) {
+    // validate BEFORE any network I/O, not after the first fetch
+    const host = String(endpointHost).toLowerCase();
+    if (host !== "127.0.0.1" && host !== "localhost") {
+      throw new Error(`CDP endpoint host must be loopback (127.0.0.1), got: ${endpointHost}`);
+    }
     this.port = port;
     this.endpointHost = endpointHost;
     this.base = `http://${endpointHost}:${port}`;
@@ -37,12 +42,7 @@ export class CdpClient {
   }
 
   async listTargets() {
-    const targets = await this._get("/json/list");
-    // confirm the endpoint is actually bound to loopback, not an exposed host
-    if (String(this.endpointHost).toLowerCase() !== "127.0.0.1" && String(this.endpointHost).toLowerCase() !== "localhost") {
-      throw new Error(`CDP endpoint host must be loopback (127.0.0.1), got: ${this.endpointHost}`);
-    }
-    return targets;
+    return this._get("/json/list");
   }
 
   async createTarget(url) {
@@ -308,6 +308,13 @@ export class BrainSession {
       // would reject a perfectly valid answer forever (seen live).
       const newMessage = count > beforeCount && String(last ?? "").length > 0;
       if (newMessage) {
+        // verify we are still in the SAME conversation BEFORE trusting the
+        // reply: a reconnect may have rebound us to a different chatgpt.com
+        // tab, and that tab's fresh message must not be taken as our answer.
+        const idNow = await resilient(() => this.getIdentity());
+        if (beforeIdentity.external_id && idNow?.external_id && idNow.external_id !== beforeIdentity.external_id) {
+          return { ok: false, request_id: randomId(), conversation_id: beforeIdentity.external_id, assistant_message: "", completion_reason: "wrong_conversation", error: "conversation changed during turn" };
+        }
         // wait until the new message stops changing AND is not a generation
         // placeholder (e.g. "正在思考" / "Generating..."), then treat as done.
         const placeholder = /正在思考|generating|思考中|\.\.\./i.test(last.trim()) && last.trim().length < 20;
@@ -349,17 +356,6 @@ export class BrainSession {
     }
     return { ok: false, request_id: randomId(), conversation_id: beforeIdentity.external_id, assistant_message: "", completion_reason: "timeout", error: `brain turn timed out after ${timeoutMs}ms` };
   }
-}
-
-export function sha256(text) {
-  // minimal FNV-1a for M1 (no deps); switch to node:crypto when needed
-  let h = 0x811c9dc5;
-  const s = String(text ?? "");
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16);
 }
 
 export function randomId() {

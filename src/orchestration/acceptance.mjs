@@ -62,7 +62,9 @@ export function evaluateAcceptanceGate({ acceptance = [], evidence = [] } = {}) 
 
   const mandatoryMet = mandatory.length - missing.length - failed.length;
   return {
-    ok: mandatory.length > 0 ? (missing.length === 0 && failed.length === 0) : false,
+    // vacuous truth: a plan with NO mandatory criteria is completable on the
+    // brain's judgment alone; otherwise every criterion needs passing evidence
+    ok: missing.length === 0 && failed.length === 0,
     proven: mandatory.length > 0,
     mandatoryMet,
     mandatoryTotal: mandatory.length,

@@ -60,14 +60,18 @@ function asList(v) {
   return arr.map(x => (typeof x === "string" ? x.trim() : x)).filter(Boolean).slice(0, 40);
 }
 
-function normalizeStatus(value, text = "") {
-  const s = asString(value || text).toLowerCase();
-  if (/completed|complete|done|finished|success/.test(s)) return "completed";
-  if (/blocked|blocker|无法继续|被阻塞/.test(s)) return "blocked";
-  if (/repeated|repeat|loop|重复|循环/.test(s)) return "repeated";
-  if (/awaiting|approval|需要.*(审批|确认)|pending.*user/.test(s)) return "awaiting_user";
-  if (/max[_ -]?round|轮数上限/.test(s)) return "max_rounds";
-  if (/failed|error|fail/.test(s)) return "failed";
+export function normalizeStatus(value, text = "") {
+  // word-boundary matching on the VALUE field only, with negated phrases
+  // stripped first — scanning raw prose misfires ("must not fail" → failed,
+  // "not done yet" → completed)
+  const s = String(value || "").toLowerCase();
+  const positive = s.replace(/\b(?:not|never|hardly|barely|isn'?t|wasn'?t|aren'?t|weren'?t|don'?t|doesn'?t|didn'?t|haven'?t|hasn'?t|won'?t|can'?t|cannot)\b[^.,;]*/g, " ");
+  if (/\bcompleted?\b|\bdone\b|\bfinished\b|\bsuccess\b/.test(positive)) return "completed";
+  if (/\bblocked?\b|无法继续|被阻塞/.test(s)) return "blocked";
+  if (/\brepeat(?:ed|ing)?\b|重复|循环/.test(s)) return "repeated";
+  if (/\bawaiting(?:_user)?\b|\bapproval\b/.test(s)) return "awaiting_user";
+  if (/\bmax[_ -]?rounds?\b/.test(s)) return "max_rounds";
+  if (/\bfailed?\b|\berror\b/.test(s)) return "failed";
   return "continue";
 }
 
@@ -76,7 +80,7 @@ function normalizeStatus(value, text = "") {
 export function validateBrainPlan(rawText) {
   const parsed = extractJson(rawText);
   if (!parsed) return { ok: false, error: "no JSON object found" };
-  const status = normalizeStatus(parsed.status ?? parsed.decision, rawText);
+  const status = normalizeStatus(parsed.status ?? parsed.decision);
   const task = asString(parsed.task ?? parsed.next_task ?? parsed.nextTask);
   const acceptance = asList(parsed.acceptance ?? parsed.acceptance_criteria ?? parsed.acceptanceCriteria);
   const constraints = asList(parsed.constraints);
@@ -89,7 +93,7 @@ export function validateBrainPlan(rawText) {
 export function validateBrainReview(rawText) {
   const parsed = extractJson(rawText);
   if (!parsed) return { ok: false, error: "no JSON object found" };
-  const status = normalizeStatus(parsed.status ?? parsed.decision ?? parsed.result, rawText);
+  const status = normalizeStatus(parsed.status ?? parsed.decision ?? parsed.result);
   const task = asString(parsed.next_task ?? parsed.nextTask ?? parsed.task);
   const acceptance = asList(parsed.acceptance ?? parsed.acceptance_criteria);
   const constraints = asList(parsed.constraints);

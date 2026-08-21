@@ -55,6 +55,13 @@ export function createSessionManager({ file = defaultSessionStore() } = {}) {
       if (Array.isArray(data)) return data;
       return [];
     } catch {
+      // corrupted store: move it aside instead of letting the next save wipe
+      // the session history silently
+      const backup = `${file}.corrupt-${Date.now()}`;
+      try {
+        renameSync(file, backup);
+        process.stderr.write(`[sessions] corrupted store moved to ${backup}\n`);
+      } catch {}
       return [];
     }
   }

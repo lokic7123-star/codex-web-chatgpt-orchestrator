@@ -24,6 +24,9 @@ jobs:
           done < <(find . -name '*.mjs' -not -path './node_modules/*')
           exit $fail
 
+      - name: Acceptance contract (offline)
+        run: node scripts/verify_acceptance.mjs
+
       - name: Codex protocol tests (offline)
         run: node scripts/verify_codex_protocol.mjs
 

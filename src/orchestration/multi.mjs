@@ -206,7 +206,14 @@ async function runOne({ entry, client, session, manager, log }) {
       manager.upsert({ id: rec.id, worktree_path: wt.path, worktree_branch: wt.branch });
     }
 
-    const executor = createExecutorAdapter({ cwd: effectiveCwd });
+    const executor = createExecutorAdapter({
+      cwd: effectiveCwd,
+      onApproval: req => {
+        try {
+          log(`[${rec.name}] APPROVAL REQUIRED: ${req.method || "approval"} ${JSON.stringify(req.params || {}).slice(0, 260)}`);
+        } catch {}
+      },
+    });
 
     // progress resume: same name continues from the saved runner snapshot
     // (round/history/checkpoint) unless spec sets fresh:true

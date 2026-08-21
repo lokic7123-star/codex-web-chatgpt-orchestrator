@@ -3,7 +3,7 @@
 
 import { validateBrainPlan, validateBrainReview, parseBrainReply, extractJson, clip } from "../../scripts/protocol.mjs";
 
-export function createBrainAdapter({ session, promptBuilder = null } = {}) {
+export function createBrainAdapter({ session, promptBuilder = null, reportTurns = false } = {}) {
   if (!session) throw new TypeError("brain adapter requires a session");
 
   const brain = {
@@ -23,6 +23,8 @@ export function createBrainAdapter({ session, promptBuilder = null } = {}) {
       return { content: [{ type: "text", text: reply.assistant_message }], structuredContent: parsed };
     },
 
+    // optional standalone acknowledgement turn — the review prompt already
+    // carries the report, so this is OFF by default to save a chat turn/round
     async report({ round, plan, report, report_text }) {
       const prompt = typeof promptBuilder?.report === "function"
         ? promptBuilder.report({ round, plan, report, report_text })
@@ -68,6 +70,7 @@ export function createBrainAdapter({ session, promptBuilder = null } = {}) {
     },
   };
 
+  if (!reportTurns) delete brain.report;
   return brain;
 }
 
