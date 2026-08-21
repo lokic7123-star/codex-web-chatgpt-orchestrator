@@ -1,0 +1,153 @@
+// Multi-session orchestration: N isolated brain-hand loops in ONE process.
+//
+// Isolation per session:
+//   - dedicated chatgpt.com tab (exclusive BrainSession: never steals an
+//     unbound tab; rebinds only by its own target/conversation identity)
+//   - dedicated codex app-server child + workspace cwd (executor adapter)
+//   - own runner state machine and registry record
+//
+// Phase 1 binds tabs/conversations sequentially (no /json/new races),
+// Phase 2 runs all loops concurrently via Promise.allSettled: one session
+// failing must not take the others down.
+
+import { CdpClient, BrainSession } from "../browser/cdp.mjs";
+import { createBrainAdapter } from "./brain_adapter.mjs";
+import { createExecutorAdapter } from "./executor_adapter.mjs";
+import { createRunner, newState } from "./runner.mjs";
+
+export function normalizeEntries(spec) {
+  const arr = Array.isArray(spec)
+    ? spec
+    : Array.isArray(spec?.sessions) ? spec.sessions : null;
+  if (!arr || arr.length === 0) {
+    throw new Error("spec must be an array of {name, goal, cwd} entries (or {sessions:[...]})");
+  }
+  if (arr.length > 8) throw new Error("at most 8 parallel sessions are supported");
+  return arr.map((e, i) => {
+    if (!e?.goal) throw new Error(`spec[${i}]: "goal" is required`);
+    if (!e?.cwd) throw new Error(`spec[${i}]: "cwd" is required`);
+    const maxRounds = e.max_rounds != null ? Number(e.max_rounds) : null;
+    if (maxRounds != null && (!Number.isInteger(maxRounds) || maxRounds < 1)) {
+      throw new Error(`spec[${i}]: max_rounds must be a positive integer`);
+    }
+    return {
+      name: String(e.name || `session-${i + 1}`),
+      goal: String(e.goal),
+      cwd: String(e.cwd),
+      max_rounds: maxRounds,
+      constraints: Array.isArray(e.constraints) ? e.constraints.map(String) : [],
+      conversation: e.conversation && typeof e.conversation === "object" ? e.conversation : null,
+    };
+  });
+}
+
+export async function runParallelSessions({ entries, manager, port, onLog = null }) {
+  const log = msg => {
+    try { onLog?.(msg); } catch {}
+    process.stderr.write(`[multi] ${msg}\n`);
+  };
+
+  // Phase 1 (sequential): bind every session to its OWN tab / conversation.
+  const prepared = [];
+  try {
+    for (const entry of entries) {
+      const client = new CdpClient({ port });
+      const session = new BrainSession({ client, exclusive: true });
+      await session.ensureConnected();
+      if (entry.conversation) {
+        const sel = await session.selectConversation(entry.conversation);
+        if (!sel.selected) throw new Error(`[${entry.name}] select conversation failed: ${sel.error}`);
+      }
+      prepared.push({ entry, client, session });
+      log(`[${entry.name}] bound to tab ${client.target?.id || "?"}${session.identity?.external_id ? ` conversation ${session.identity.external_id}` : ""}`);
+    }
+  } catch (error) {
+    for (const p of prepared) { try { p.client.close(); } catch {} }
+    throw error;
+  }
+
+  // Phase 2 (concurrent): independent brain-hand loops.
+  const runs = prepared.map(({ entry, client, session }) =>
+    runOne({ entry, client, session, manager, log }));
+  const settled = await Promise.allSettled(runs);
+  return settled.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    return {
+      name: entries[i]?.name || `session-${i + 1}`,
+      stopped: true,
+      status: "failed",
+      reason: String(r.reason?.message || r.reason),
+    };
+  });
+}
+
+async function runOne({ entry, client, session, manager, log }) {
+  const rec = manager.upsert({
+    name: entry.name,
+    goal: entry.goal,
+    cwd: entry.cwd,
+    status: "running",
+    max_rounds: entry.max_rounds,
+    last_error: null,
+    result_summary: null,
+    conversation: session.identity,
+  });
+  log(`[${rec.name}] loop started (record ${rec.id})`);
+
+  const executor = createExecutorAdapter({ cwd: entry.cwd });
+  let st = newState(entry.goal, entry.constraints);
+  if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;
+
+  const runner = createRunner({
+    getState: () => st,
+    setState: ns => { st = ns; },
+    brain: createBrainAdapter({ session }),
+    executor,
+    onEvent: ev => log(`[${rec.name}] ${ev.type}: ${ev.summary}`),
+    persist: async s => {
+      manager.upsert({
+        id: rec.id,
+        status: "running",
+        round: s.round,
+        conversation: session.identity,
+        executor_thread_id: executor.threadId,
+      });
+    },
+  });
+
+  try {
+    const result = await runner.runUntilStop({});
+    manager.upsert({
+      id: rec.id,
+      status: result.status || "unknown",
+      round: st.round,
+      conversation: session.identity,
+      executor_thread_id: executor.threadId,
+      // a terminal reason is not necessarily an error; only failures are
+      last_error: result.status === "failed" ? String(result.reason || "").slice(0, 500) : null,
+      result_summary: String(result.reason || result.review?.reason || "").slice(0, 500) || null,
+    });
+    log(`[${rec.name}] finished: ${result.status}`);
+    return {
+      name: rec.name,
+      id: rec.id,
+      status: result.status,
+      rounds_run: result.rounds_run,
+      reason: result.reason || result.review?.reason || null,
+    };
+  } catch (error) {
+    const msg = String(error?.message || error);
+    manager.upsert({
+      id: rec.id,
+      status: "failed",
+      last_error: msg.slice(0, 500),
+      conversation: session.identity,
+      executor_thread_id: executor.threadId,
+    });
+    log(`[${rec.name}] failed: ${msg}`);
+    return { name: rec.name, id: rec.id, stopped: true, status: "failed", reason: msg };
+  } finally {
+    try { await executor.close(); } catch {}
+    try { client.close(); } catch {}
+  }
+}

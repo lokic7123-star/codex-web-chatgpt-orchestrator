@@ -8,13 +8,18 @@
 //   list                        list visible conversations
 //   select  --title <t>|--id <id>|--url <u>
 //   run  --goal <g> [--max-rounds n] [--cwd d]   full brain-hand loop
+//   run-multi --spec <plan.json>                 N parallel brain-hand loops
+//   sessions                    list registered orchestration sessions
 //   status                      runner state
 // Logs go to stderr; results to stdout (so results can be piped/parsed).
 
+import { readFileSync } from "node:fs";
 import { CdpClient, BrainSession, DEFAULT_PORT } from "../src/browser/cdp.mjs";
 import { createBrainAdapter } from "../src/orchestration/brain_adapter.mjs";
 import { createExecutorAdapter } from "../src/orchestration/executor_adapter.mjs";
 import { createRunner, newState } from "../src/orchestration/runner.mjs";
+import { createSessionManager } from "../src/orchestration/session_manager.mjs";
+import { normalizeEntries, runParallelSessions } from "../src/orchestration/multi.mjs";
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -41,7 +46,7 @@ function getSession() {
 
 async function main() {
   if (!cmd || cmd === "--help" || cmd === "-h") {
-    out({ usage: "web-orchestrator <turn|identity|health|list|select|run|status>", note: "see source header for args" });
+    out({ usage: "web-orchestrator <turn|identity|health|list|select|run|run-multi|sessions|status>", note: "see source header for args" });
     process.exit(0);
   }
 
@@ -98,6 +103,29 @@ async function main() {
       const result = await runner.runUntilStop({});
       out(result);
       await executor.close();
+      return;
+    }
+    case "sessions": {
+      const mgr = createSessionManager();
+      out({ store: mgr.file, sessions: mgr.list() });
+      return;
+    }
+    case "run-multi": {
+      const specFile = getFlag("spec");
+      if (!specFile) fail("run-multi requires --spec <plan.json>");
+      let raw;
+      try { raw = readFileSync(specFile, "utf8"); } catch { fail(`cannot read spec file: ${specFile}`); }
+      let spec;
+      try { spec = JSON.parse(raw); } catch (e) { fail(`spec is not valid JSON: ${e.message}`); }
+      const entries = normalizeEntries(spec);
+      const mgr = createSessionManager();
+      const results = await runParallelSessions({
+        entries,
+        manager: mgr,
+        port: Number(process.env.WEB_PRO_PORT || DEFAULT_PORT),
+      });
+      out({ results });
+      if (results.some(r => r.status === "failed")) process.exitCode = 1;
       return;
     }
     case "status": {

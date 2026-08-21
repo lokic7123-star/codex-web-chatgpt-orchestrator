@@ -51,6 +51,20 @@ export class CdpClient {
     return res.json();
   }
 
+  // Bring a tab to the foreground. Background tabs are timer-throttled
+  // (Edge/Chrome), which delays framework rendering and keeps the send button
+  // disabled; activating right before sending avoids that.
+  async activate(targetId = this.target?.id) {
+    if (!targetId) return false;
+    for (const method of ["GET", "PUT"]) {
+      try {
+        const res = await fetch(`${this.base}/json/activate/${targetId}`, { method });
+        if (res.ok) return true;
+      } catch {}
+    }
+    return false;
+  }
+
   close() {
     if (this.socket) { try { this.socket.close(); } catch {} }
     this.socket = null;
@@ -111,13 +125,16 @@ export class CdpClient {
 }
 
 export class BrainSession {
-  constructor({ client, providerId = DEFAULT_BRAIN_PROVIDER } = {}) {
+  constructor({ client, providerId = DEFAULT_BRAIN_PROVIDER, exclusive = false } = {}) {
     this.client = client;
     this.providerId = providerId;
     // stable identity is conversation_id (external_id); target_id is transient
     this.provider = createBrainProvider(providerId, { evaluate: (...a) => client.evaluate(...a) });
     this.targetId = null;
     this.identity = null;
+    // exclusive mode (parallel sessions): never grab an unbound matching tab;
+    // rebind only by stored target/conversation identity, else create a dedicated tab.
+    this.exclusive = Boolean(exclusive);
   }
 
   async _findPage() {
@@ -134,6 +151,7 @@ export class BrainSession {
         && this._idFromUrl(t.url) === this.identity.external_id);
       if (found) return found;
     }
+    if (this.exclusive) return null;
     return pages.find(t => providerMatchesUrl(this.provider.hosts, t.url)) || null;
   }
 
@@ -205,6 +223,15 @@ export class BrainSession {
    */
   async brainTurn(text, { timeoutMs = BRAIN_DEFAULT_TIMEOUT_MS, idleMs = BRAIN_IDLE_TIMEOUT_MS, nonce = null } = {}) {
     await this.ensureConnected();
+    // Fresh tabs may still be loading: wait for an interactive composer before
+    // recording the baseline, otherwise the send below would fail immediately.
+    const readyDeadline = Date.now() + 30000;
+    while (!(await this.provider.findComposer())) {
+      if (Date.now() > readyDeadline) {
+        return { ok: false, request_id: randomId(), conversation_id: this.identity?.external_id || null, assistant_message: "", completion_reason: "send_failed", error: "composer did not become available" };
+      }
+      await sleep(500);
+    }
     const beforeIdentity = await this.getIdentity();
     const beforeCount = await this.provider.countAssistantMessages();
     const beforeLast = await this.provider.readLatestAssistant();
@@ -216,24 +243,47 @@ export class BrainSession {
     // poll for the (asynchronously rendered) send button and click it.
     // Node-side polling with sync evaluate avoids awaitPromise inside a
     // navigation-prone context (which can throw "Promise was collected").
-    const sendDeadline = Date.now() + 8000;
+    await this.client.activate();
+    const sendStartedAt = Date.now();
+    const sendDeadline = sendStartedAt + 30000;
     let sendResult = { ok: false, error: "no send button yet", retry: true };
+    let refilled = false;
     while (Date.now() < sendDeadline) {
       sendResult = await this.provider.findAndClickSend();
       if (sendResult.ok) break;
+      // a throttled tab may render slowly; refill once in case the draft
+      // was lost while waiting for the button to appear/enable
+      if (!refilled && Date.now() - sendStartedAt >= 10000) {
+        refilled = true;
+        await this.provider.sendMessage(text);
+      }
       await sleep(300);
     }
     if (!sendResult.ok) return { ok: false, completion_reason: "send_failed", error: sendResult.error, request_id: randomId() };
 
-    // wait for a NEW assistant message: count increased OR last hash changed
+    // wait for a NEW assistant message: count increased OR last hash changed.
+    // Reads tolerate transient disconnections (e.g. Edge suspending a
+    // background tab drops the DevTools websocket); reconnect and retry once,
+    // since attaching CDP back to the target wakes it up.
+    const resilient = async op => {
+      try {
+        return await op();
+      } catch (error) {
+        if (String(error?.message || "").includes("not connected")) {
+          await this.ensureConnected();
+          return op();
+        }
+        throw error;
+      }
+    };
     const deadline = Date.now() + timeoutMs;
     let lastChange = Date.now();
     let seenStable = 0;
     let lastRead = "";
     while (Date.now() < deadline) {
       await sleep(600);
-      const count = await this.provider.countAssistantMessages();
-      const last = await this.provider.readLatestAssistant();
+      const count = await resilient(() => this.provider.countAssistantMessages());
+      const last = await resilient(() => this.provider.readLatestAssistant());
       const hash = sha256(last);
       const newMessage = count > beforeCount && hash !== beforeHash;
       if (newMessage) {
@@ -261,7 +311,7 @@ export class BrainSession {
         continue;
       }
       // identity change mid-turn (user switched conversation) => fail loudly
-      const idNow = await this.getIdentity();
+      const idNow = await resilient(() => this.getIdentity());
       if (idNow.external_id && beforeIdentity.external_id && idNow.external_id !== beforeIdentity.external_id) {
         return { ok: false, request_id: randomId(), conversation_id: beforeIdentity.external_id, assistant_message: "", completion_reason: "wrong_conversation", error: "conversation changed during turn" };
       }

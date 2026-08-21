@@ -52,29 +52,49 @@ function makeChatgptProvider({ evaluate, providerId = "chatgpt" } = {}) {
         const input = selectors.map(s => document.querySelector(s)).find(el => el);
         if (!input) return { ok: false, error: 'no visible input box' };
         input.focus();
-        document.execCommand('insertText', false, value);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: value }));
-        return { ok: true, text: input.innerText };
+        let filled = '';
+        if (input.tagName === 'TEXTAREA') {
+          // React-controlled textarea (fresh-chat homepage): execCommand leaves
+          // the framework state desynced (draft ends up in ?prompt-textarea= and
+          // send becomes a no-op). Use the native value setter instead.
+          const desc = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+          if (desc && desc.set) desc.set.call(input, value);
+          else input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          filled = input.value || '';
+        } else {
+          document.execCommand('insertText', false, value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: value }));
+          filled = input.innerText || '';
+        }
+        return { ok: Boolean(filled), text: filled, kind: input.tagName };
       })()`);
     },
 
     async findAndClickSend() {
-      // SYNC: find the send button (by selector or label) and click it.
+      // SYNC: find the send button (by testid first, label fallback) and click.
       return evaluate(`(() => {
         const sendSelectors = ${JSON.stringify(sel.send)};
         const sendTerms = ${JSON.stringify(sel.send_terms)};
-        const bySelector = sendSelectors.map(s => document.querySelector(s)).find(el => el);
-        const byLabel = [...document.querySelectorAll('button')].find(b => {
-          const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
-          return sendTerms.some(t => label.includes(t.toLowerCase()));
-        });
-        const send = bySelector || byLabel;
+        let send = null;
+        for (const s of sendSelectors) {
+          const el = document.querySelector(s);
+          if (el) { send = el; break; }
+        }
+        if (!send) {
+          send = [...document.querySelectorAll('button')].find(b => {
+            const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
+            return sendTerms.some(t => label.includes(t.toLowerCase()));
+          });
+        }
         if (!send) return { ok: false, error: 'no send button' };
-        if (send.disabled) return { ok: false, error: 'send button disabled', retry: true };
+        if (send.disabled || send.getAttribute('aria-disabled') === 'true') {
+          return { ok: false, error: 'send button disabled', retry: true };
+        }
         send.click();
-        return { ok: true };
+        return { ok: true, via: send.getAttribute('data-testid') || 'label' };
       })()`);
     },
 

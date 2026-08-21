@@ -31,6 +31,8 @@ Run from the project root (`web-pro-orchestrator` checkout):
 - `node scripts/cli.mjs turn --nonce` — M1 acceptance (exact reply check)
 - `node scripts/cli.mjs turn "<prompt>"` — one atomic brain turn, returns the exact new reply
 - `node scripts/cli.mjs run --goal "<goal>" [--max-rounds n] [--cwd <dir>]` — full bounded brain-hand loop until a terminal state
+- `node scripts/cli.mjs run-multi --spec plan.json` — N parallel brain-hand loops (each gets its own tab + workspace); spec is an array of `{name, goal, cwd, max_rounds?, conversation?}`
+- `node scripts/cli.mjs sessions` — list registered orchestration sessions (status/round/conversation)
 - `node scripts/cli.mjs status` — runner state (note: CLI is stateless per invocation)
 
 ## Key semantics
@@ -39,6 +41,7 @@ Run from the project root (`web-pro-orchestrator` checkout):
 - **Acceptance gate**: a run reaches `completed` only when every mandatory acceptance criterion has a passing evidence item. Missing/failed evidence downgrades to `blocked`.
 - **Watchdog**: the Codex worker turn has a hard and an idle timeout; on timeout it interrupts, then kills the app-server child, then marks the route `blocked`. It never auto-approves.
 - **awaiting_user**: approval/interaction requests stop the run in an `awaiting_user` state (not a failure); the user resolves it, then resumes.
+- **Parallel sessions** (`run-multi`): each session binds an exclusive chatgpt.com tab (never steals other tabs), its own codex app-server child and workspace; one session failing does not affect the others.
 
 ## When to use / not use
 
