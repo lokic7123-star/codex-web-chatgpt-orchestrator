@@ -307,7 +307,7 @@ export class BrainSession {
       // repeated prompt legitimately yields an identical reply, hash equality
       // would reject a perfectly valid answer forever (seen live).
       const newMessage = count > beforeCount && String(last ?? "").length > 0;
-      if (newMessage) {
+        if (newMessage) {
         // verify we are still in the SAME conversation BEFORE trusting the
         // reply: a reconnect may have rebound us to a different chatgpt.com
         // tab, and that tab's fresh message must not be taken as our answer.
@@ -316,8 +316,9 @@ export class BrainSession {
           return { ok: false, request_id: randomId(), conversation_id: beforeIdentity.external_id, assistant_message: "", completion_reason: "wrong_conversation", error: "conversation changed during turn" };
         }
         // wait until the new message stops changing AND is not a generation
-        // placeholder (e.g. "正在思考" / "Generating..."), then treat as done.
-        const placeholder = /正在思考|generating|思考中|\.\.\./i.test(last.trim()) && last.trim().length < 20;
+        // placeholder. No bare "..." here: short real replies like "OK…" or
+        // "Done..." would otherwise stall until the idle timeout.
+        const placeholder = /正在思考|思考中|generating/i.test(last.trim()) && last.trim().length < 20;
         if (!placeholder && last === lastRead) {
           seenStable += 1;
           if (seenStable >= 2) {

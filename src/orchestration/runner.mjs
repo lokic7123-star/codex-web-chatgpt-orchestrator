@@ -200,6 +200,10 @@ export function createRunner({
     const gate = enforceAcceptanceGate(review, plan.acceptance, report.evidence);
     review = { ...review, ...gate.decision, completion_proof: gate.gate };
     state.latestReview = review;
+    if (review.status === "completed" && !gate.gate.proven) {
+      // no mandatory criteria: completion rests on the brain's judgment alone
+      await emit("UNPROVEN_COMPLETION", `round ${round}: plan carried no acceptance criteria — completion is claim-based, not evidence-based`);
+    }
 
     // repeated detection with workspace state
     const ws = workspaceState(workspace);
