@@ -106,6 +106,20 @@ export function createExecutorAdapter({
       }
     },
 
+    async rollover(baseInstructions = "") {
+      // start a FRESH thread on the same app-server child, seeding it with the
+      // checkpoint summary so the new thread keeps goal context (design §10)
+      await ensureExecutor();
+      const started = await executor.startThread({
+        model: activeSnapshot.resolved.model || undefined,
+        cwd,
+        sandbox: "workspace-write",
+        baseInstructions: String(baseInstructions || "").trim() || undefined,
+      });
+      threadId = started.thread_id;
+      return threadId;
+    },
+
     async close() {
       if (executor) executor.close();
       executor = null;

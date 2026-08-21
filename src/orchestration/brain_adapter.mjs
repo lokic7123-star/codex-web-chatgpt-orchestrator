@@ -1,16 +1,16 @@
 // Brain adapter: maps the runner's brain.plan/report/review onto BrainSession
 // (web ChatGPT) using the atomic brainTurn, with protocol schema gate + one repair.
 
-import { validateBrainPlan, validateBrainReview, parseBrainReply, clip } from "../../scripts/protocol.mjs";
+import { validateBrainPlan, validateBrainReview, parseBrainReply, extractJson, clip } from "../../scripts/protocol.mjs";
 
 export function createBrainAdapter({ session, promptBuilder = null } = {}) {
   if (!session) throw new TypeError("brain adapter requires a session");
 
   const brain = {
-    async plan({ goal, constraints, round, ...rest }) {
+    async plan({ goal, constraints, round, checkpoint, history, ...rest }) {
       const prompt = typeof promptBuilder?.plan === "function"
         ? promptBuilder.plan({ goal, constraints, round })
-        : defaultPlanPrompt(goal, constraints);
+        : defaultPlanPrompt(goal, constraints, { checkpoint, history });
       const reply = await session.brainTurn(prompt, { timeoutMs: rest.timeout_ms });
       if (!reply.ok) return brainError(reply.completion_reason, reply.error);
       const parsed = await parseBrainReply(reply.assistant_message, {
@@ -48,6 +48,24 @@ export function createBrainAdapter({ session, promptBuilder = null } = {}) {
       }
       return { content: [{ type: "text", text: reply.assistant_message }], structuredContent: parsed };
     },
+
+    async checkpoint({ goal, history, checkpoint }) {
+      const prompt = [
+        "Summarize the orchestration progress so far into a compact checkpoint.",
+        "It will seed a FRESH executor thread that has no other memory. Include:",
+        "the original goal, what is already done/proven, what remains, and key decisions or constraints learned.",
+        'Return JSON only, no markdown fences: {"summary":"compact factual summary"}',
+        "",
+        `GOAL: ${clip(goal)}`,
+        `PREVIOUS CHECKPOINT: ${clip(checkpoint || "none")}`,
+        `ROUND HISTORY: ${clip(JSON.stringify(history || []), 4000)}`,
+      ].join("\n");
+      const reply = await session.brainTurn(prompt, {});
+      if (!reply.ok) return brainError(reply.completion_reason, reply.error);
+      const parsed = extractJson(reply.assistant_message);
+      const summary = String(parsed?.summary || reply.assistant_message || "").slice(0, 6000);
+      return { content: [{ type: "text", text: summary }], structuredContent: { ok: true, summary } };
+    },
   };
 
   return brain;
@@ -57,8 +75,8 @@ function brainError(code, message) {
   return { isError: true, content: [{ type: "text", text: message || code }], structuredContent: { code, reason: message, status: "blocked" } };
 }
 
-function defaultPlanPrompt(goal, constraints) {
-  return [
+function defaultPlanPrompt(goal, constraints, ctx = {}) {
+  const lines = [
     "You are the planning brain supervising a Codex executor.",
     "Create the next concrete, verifiable task for the executor. Do not claim you edited files or ran commands.",
     "Return JSON only, no markdown fences, no surrounding prose, exactly this shape:",
@@ -67,7 +85,14 @@ function defaultPlanPrompt(goal, constraints) {
     "",
     `GOAL: ${clip(goal)}`,
     `CONSTRAINTS: ${JSON.stringify(constraints)}`,
-  ].join("\n");
+  ];
+  if (ctx.checkpoint) {
+    lines.push(`CHECKPOINT (facts from earlier rounds; trust this):\n${clip(ctx.checkpoint, 3000)}`);
+  }
+  if (Array.isArray(ctx.history) && ctx.history.length) {
+    lines.push(`RECENT ROUNDS:\n${ctx.history.slice(-2).map(h => `- r${h.round}: ${h.task} => ${h.status}`).join("\n")}`);
+  }
+  return lines.join("\n");
 }
 
 function defaultReportPrompt(reportText) {

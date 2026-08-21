@@ -217,6 +217,26 @@ export class BrainSession {
   }
 
   /**
+   * Bind to a conversation, REUSING an existing tab that already shows it
+   * whenever possible (no new tab). Pre-setting identity lets _findPage
+   * rebind by conversation id; only navigate when the bound page differs.
+   */
+  async openConversation({ external_id, url, title } = {}) {
+    if (external_id && this.identity?.external_id !== external_id) {
+      this.identity = { provider: this.providerId, external_id };
+    }
+    await this.ensureConnected();
+    const cur = await this.provider.getConversationIdentity();
+    if (external_id && cur?.external_id === external_id) {
+      this.identity = cur;
+      return { selected: true, identity: cur, reused_existing_tab: true };
+    }
+    const sel = await this.selectConversation({ external_id, url, title });
+    if (sel.selected) sel.reused_existing_tab = false;
+    return sel;
+  }
+
+  /**
    * ATOMIC brain turn: baseline -> send -> wait -> read -> validate.
    * Accepts a reply only when the assistant message count increased AND
    * the last message hash changed, so a stray/stale message is not misread.
@@ -232,10 +252,22 @@ export class BrainSession {
       }
       await sleep(500);
     }
+    // Reads tolerate transient disconnections (e.g. Edge suspending a
+    // background tab drops the DevTools websocket); reconnect and retry once,
+    // since attaching CDP back to the target wakes it up.
+    const resilient = async op => {
+      try {
+        return await op();
+      } catch (error) {
+        if (String(error?.message || "").includes("not connected")) {
+          await this.ensureConnected();
+          return op();
+        }
+        throw error;
+      }
+    };
     const beforeIdentity = await this.getIdentity();
-    const beforeCount = await this.provider.countAssistantMessages();
-    const beforeLast = await this.provider.readLatestAssistant();
-    const beforeHash = sha256(beforeLast);
+    const beforeCount = await resilient(() => this.provider.countAssistantMessages());
 
     const sent = await this.provider.sendMessage(text);
     if (!sent.ok) return { ok: false, completion_reason: "send_failed", error: sent.error, request_id: randomId() };
@@ -261,21 +293,7 @@ export class BrainSession {
     }
     if (!sendResult.ok) return { ok: false, completion_reason: "send_failed", error: sendResult.error, request_id: randomId() };
 
-    // wait for a NEW assistant message: count increased OR last hash changed.
-    // Reads tolerate transient disconnections (e.g. Edge suspending a
-    // background tab drops the DevTools websocket); reconnect and retry once,
-    // since attaching CDP back to the target wakes it up.
-    const resilient = async op => {
-      try {
-        return await op();
-      } catch (error) {
-        if (String(error?.message || "").includes("not connected")) {
-          await this.ensureConnected();
-          return op();
-        }
-        throw error;
-      }
-    };
+    // wait for a NEW assistant message (strict count increase)
     const deadline = Date.now() + timeoutMs;
     let lastChange = Date.now();
     let seenStable = 0;
@@ -284,8 +302,11 @@ export class BrainSession {
       await sleep(600);
       const count = await resilient(() => this.provider.countAssistantMessages());
       const last = await resilient(() => this.provider.readLatestAssistant());
-      const hash = sha256(last);
-      const newMessage = count > beforeCount && hash !== beforeHash;
+      // a strict count increase is itself proof a NEW assistant message node
+      // exists. Do NOT additionally require a different content hash: when a
+      // repeated prompt legitimately yields an identical reply, hash equality
+      // would reject a perfectly valid answer forever (seen live).
+      const newMessage = count > beforeCount && String(last ?? "").length > 0;
       if (newMessage) {
         // wait until the new message stops changing AND is not a generation
         // placeholder (e.g. "正在思考" / "Generating..."), then treat as done.
@@ -293,14 +314,21 @@ export class BrainSession {
         if (!placeholder && last === lastRead) {
           seenStable += 1;
           if (seenStable >= 2) {
+            // refresh identity: this turn may have just CREATED the
+            // conversation (fresh-tab case) — don't record stale pre-turn state
+            let finalIdentity = beforeIdentity;
+            try { finalIdentity = await this.getIdentity(); } catch {}
             return {
               ok: true,
               request_id: randomId(),
-              conversation_id: beforeIdentity.external_id,
+              conversation_id: finalIdentity?.external_id || beforeIdentity.external_id,
               assistant_message: last,
-              observed_url: beforeIdentity.canonical_url,
+              observed_url: finalIdentity?.canonical_url || beforeIdentity.canonical_url,
               completion_reason: "ok",
-              identity_changed: false,
+              identity_changed: Boolean(
+                beforeIdentity.external_id
+                && finalIdentity?.external_id
+                && finalIdentity.external_id !== beforeIdentity.external_id),
             };
           }
         } else if (!placeholder) {

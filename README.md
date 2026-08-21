@@ -90,7 +90,7 @@ node scripts/cli.mjs sessions                     # list registered sessions
 
 ```json
 [
-  { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10 },
+  { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10, "thread_rounds": 4 },
   { "name": "docs", "goal": "Write README for the tools package", "cwd": "D:/work/repo2",
     "conversation": { "title": "docs planner" } }
 ]
@@ -101,7 +101,9 @@ node scripts/cli.mjs run-multi --spec plan.json
 ```
 
 - Without `conversation`, each session starts a fresh ChatGPT conversation; with `conversation` (`title`, `id`, or `url`) it reuses an existing one.
-- Session records (status, round, conversation identity, executor thread) persist to `~/.codex/web-pro-orchestrator/sessions.json`; inspect anytime with `sessions`.
+- **Resume by name**: re-running a spec with the same session `name` automatically returns to that session's recorded conversation and rebinds to the tab already showing it — no new tabs, no new conversations.
+- **Thread rollover** (`thread_rounds`, optional): after N rounds on one executor thread, the brain summarizes progress into a checkpoint and the worker continues in a fresh thread seeded with it — long tasks don't drown the worker's context.
+- Session records (status, round, conversation identity, executor thread/generation) persist to `~/.codex/web-pro-orchestrator/sessions.json`; inspect anytime with `sessions`.
 - One session failing never takes the others down (`Promise.allSettled`).
 
 ## Verification scripts
@@ -110,6 +112,7 @@ node scripts/cli.mjs run-multi --spec plan.json
 node scripts/verify_turn.mjs              # M1: atomic turn + nonce roundtrip
 node scripts/verify_executor.mjs <dir>    # M2: worker creates a proof file in <dir>
 node scripts/verify_parallel.mjs [a|b]    # parallel sessions (a: live 2-tab turns, b: offline registry)
+node scripts/verify_rollover.mjs          # thread rollover + checkpoint seeding (offline)
 ```
 
 ## Safety boundaries
@@ -123,8 +126,9 @@ node scripts/verify_parallel.mjs [a|b]    # parallel sessions (a: live 2-tab tur
 
 - M1 (reliable web ChatGPT send/receive): ✅ verified via nonce roundtrip
 - M2 (full brain-hand loop): ✅ verified end-to-end — worker created a proof file whose content exactly matched the nonce, and the brain review returned `completed` through the schema gate
-- Parallel sessions: ✅ verified — two exclusive tabs turn concurrently with zero cross-talk; registry round-trips
-- Context checkpoint / thread rollover: designed (see design doc), not yet implemented
+- Parallel sessions: ✅ verified — two exclusive tabs turn concurrently with zero cross-talk; resume-by-name reuses the same conversation and tab
+- Thread rollover + checkpoint: ✅ implemented and offline-verified (rollover boundaries, checkpoint seeding, generation bookkeeping); live executor-side validation pending quota
+- DeepSeek brain provider: not planned for now (user decision)
 
 ## License
 

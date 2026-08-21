@@ -20,7 +20,7 @@ export function defaultSessionStore() {
 }
 
 const RECORD_FIELDS = [
-  "name", "goal", "cwd", "status", "round", "max_rounds",
+  "name", "goal", "cwd", "status", "round", "max_rounds", "executor_generation",
   "conversation", "executor_thread_id", "last_error", "result_summary",
 ];
 
@@ -94,6 +94,7 @@ export function createSessionManager({ file = defaultSessionStore() } = {}) {
           status: "registered",
           round: 0,
           max_rounds: null,
+          executor_generation: 1,
           conversation: null,
           executor_thread_id: null,
           last_error: null,

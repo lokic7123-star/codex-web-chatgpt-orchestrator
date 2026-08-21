@@ -30,11 +30,16 @@ export function normalizeEntries(spec) {
     if (maxRounds != null && (!Number.isInteger(maxRounds) || maxRounds < 1)) {
       throw new Error(`spec[${i}]: max_rounds must be a positive integer`);
     }
+    const threadRounds = e.thread_rounds != null ? Number(e.thread_rounds) : null;
+    if (threadRounds != null && (!Number.isInteger(threadRounds) || threadRounds < 1)) {
+      throw new Error(`spec[${i}]: thread_rounds must be a positive integer`);
+    }
     return {
       name: String(e.name || `session-${i + 1}`),
       goal: String(e.goal),
       cwd: String(e.cwd),
       max_rounds: maxRounds,
+      thread_rounds: threadRounds,
       constraints: Array.isArray(e.constraints) ? e.constraints.map(String) : [],
       conversation: e.conversation && typeof e.conversation === "object" ? e.conversation : null,
     };
@@ -48,18 +53,31 @@ export async function runParallelSessions({ entries, manager, port, onLog = null
   };
 
   // Phase 1 (sequential): bind every session to its OWN tab / conversation.
+  // Resume semantics: a session NAME reopens its recorded conversation and
+  // rebinds to the existing tab showing it — no new tab, no new conversation.
   const prepared = [];
   try {
     for (const entry of entries) {
       const client = new CdpClient({ port });
       const session = new BrainSession({ client, exclusive: true });
-      await session.ensureConnected();
-      if (entry.conversation) {
-        const sel = await session.selectConversation(entry.conversation);
-        if (!sel.selected) throw new Error(`[${entry.name}] select conversation failed: ${sel.error}`);
+      let conv = entry.conversation;
+      let resumed = false;
+      if (!conv) {
+        const prior = manager.get(entry.name);
+        const pid = prior?.conversation?.external_id;
+        const purl = prior?.conversation?.canonical_url;
+        // only a REAL conversation id is resumable; a homepage url is not
+        if (pid) {
+          conv = { external_id: pid };
+          resumed = true;
+        } else if (purl && /\/c\//.test(purl)) {
+          conv = { url: purl };
+          resumed = true;
+        }
       }
+      await session.openConversation(conv || undefined);
       prepared.push({ entry, client, session });
-      log(`[${entry.name}] bound to tab ${client.target?.id || "?"}${session.identity?.external_id ? ` conversation ${session.identity.external_id}` : ""}`);
+      log(`[${entry.name}] ${resumed ? "resumed conversation" : conv ? "opened conversation" : "fresh conversation"} · tab ${client.target?.id || "?"}${session.identity?.external_id ? ` · conversation ${session.identity.external_id}` : ""}`);
     }
   } catch (error) {
     for (const p of prepared) { try { p.client.close(); } catch {} }
@@ -109,6 +127,7 @@ async function runOne({ entry, client, session, manager, log }) {
         id: rec.id,
         status: "running",
         round: s.round,
+        executor_generation: s.executor_generation ?? 1,
         conversation: session.identity,
         executor_thread_id: executor.threadId,
       });
@@ -116,11 +135,12 @@ async function runOne({ entry, client, session, manager, log }) {
   });
 
   try {
-    const result = await runner.runUntilStop({});
+    const result = await runner.runUntilStop({ thread_rounds: entry.thread_rounds });
     manager.upsert({
       id: rec.id,
       status: result.status || "unknown",
       round: st.round,
+      executor_generation: st.executor_generation ?? 1,
       conversation: session.identity,
       executor_thread_id: executor.threadId,
       // a terminal reason is not necessarily an error; only failures are

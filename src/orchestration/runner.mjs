@@ -64,6 +64,11 @@ function newState(goal, constraints) {
     latestReview: null,
     workspaceFingerprints: [],
     startedAt: null,
+    // context layers (design §10): immutable = goal/constraints above,
+    // rolling = history below, checkpoint = compressed facts summary
+    checkpoint: null,
+    history: [],
+    executor_generation: 1,
   };
 }
 
@@ -115,10 +120,44 @@ export function createRunner({
       return { stopped: true, status: state.latestReview?.status || state.latestPlan?.status, round, max_rounds: state.maxRounds, stage: "preflight" };
     }
 
+    // thread rollover policy (design §10): after thread_rounds rounds on the
+    // current executor thread, ask the brain for a checkpoint summary and
+    // start a fresh executor thread seeded with it. Opt-in via args.thread_rounds.
+    const threadRounds = Number.isInteger(args.thread_rounds) && args.thread_rounds >= 1 ? args.thread_rounds : null;
+    state.executor_generation ??= 1;
+    state.history ??= [];
+    if (threadRounds && round > 0 && round % threadRounds === 0) {
+      await emit("ROLLOVER", `round ${round}: executor thread generation ${state.executor_generation} -> ${state.executor_generation + 1}`);
+      let summary = typeof state.checkpoint === "string" ? state.checkpoint : "";
+      if (typeof brain.checkpoint === "function") {
+        const cp = await brain.checkpoint({ goal: state.goal, constraints: state.constraints, history: state.history, checkpoint: state.checkpoint, round });
+        if (!resultError(cp)) {
+          const sc = structured(cp);
+          const t = String(sc?.summary || resultText(cp) || "").trim();
+          if (t) summary = t;
+        }
+      }
+      // mechanical fallback so rollover never blocks on the brain alone
+      if (!summary && state.history.length) {
+        summary = state.history.slice(-6).map(h => `r${h.round}: ${h.task} => ${h.status}`).join("\n");
+      }
+      if (summary) state.checkpoint = summary;
+      if (typeof executor.rollover === "function") {
+        try {
+          await executor.rollover(summary ? `Checkpoint from the previous executor thread:\n${summary}` : "");
+          state.executor_generation += 1;
+        } catch (error) {
+          return stop(state, { status: "blocked", round, max_rounds: state.maxRounds, stage: "rollover", reason: String(error?.message || error), code: "ROLLOVER_FAILED" });
+        }
+      } else {
+        await emit("ROLLOVER_SKIPPED", "executor does not support rollover");
+      }
+    }
+
     // 1. plan (reuse current plan if it's a continue; else ask brain)
     let plan = state.latestPlan?.task && state.latestPlan.status === "continue" ? state.latestPlan : null;
     if (!plan) {
-      const planResult = await brain.plan({ ...args, goal: state.goal, constraints: state.constraints, round });
+      const planResult = await brain.plan({ ...args, goal: state.goal, constraints: state.constraints, round, checkpoint: state.checkpoint, history: state.history });
       const err = resultError(planResult);
       if (err) return stop(state, { status: err.status === "awaiting_user" ? "awaiting_user" : "blocked", round, max_rounds: state.maxRounds, stage: "plan", reason: err.message });
       plan = structured(planResult);
@@ -167,6 +206,10 @@ export function createRunner({
       review = { ...review, status: "repeated", reason: "same task + same workspace repeated without progress" };
       state.latestReview = review;
     }
+
+    // rolling context: keep recent rounds for the brain's plan/checkpoint prompts
+    state.history.push({ round, task: String(plan.task || "").slice(0, 300), status: review.status, reason: String(review.reason || "").slice(0, 300) });
+    if (state.history.length > 30) state.history = state.history.slice(-30);
 
     await emit("REVIEW", `round ${round} review: ${review.status}`, review);
 
