@@ -122,6 +122,10 @@ node scripts/verify_rollover.mjs          # thread rollover + checkpoint seeding
 - The worker never auto-approves anything; approval requests stop the run.
 - Repository content sent to web ChatGPT is your choice — review what `run` sends when working with sensitive code.
 
+## Optional: give the brain GitHub access
+
+Web ChatGPT's official GitHub connector (ChatGPT Settings → Apps → GitHub → link as an *Installed* GitHub App) lets the planning brain browse your pushed repositories and public source code on its own — handy for dependency research and cross-repo review during `run`. This project needs no changes for it: the brain simply researches further by itself, while all acceptance evidence still comes from local executor runs. Prefer scoped repository access; do not use ChatGPT's MCP file-commit path — writes belong to the local worker.
+
 ## Status
 
 - M1 (reliable web ChatGPT send/receive): ✅ verified via nonce roundtrip
