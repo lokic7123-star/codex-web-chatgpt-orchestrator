@@ -116,6 +116,12 @@ export class CodexExecutor {
   }
 
   async _connect() {
+    // a previous failed attempt (spawn ok, initialize failed) may have left a
+    // live app-server behind — kill it instead of orphaning the process
+    if (this.child) {
+      try { this.child.kill?.(); } catch {}
+      this.child = null;
+    }
     this.state = "starting";
     this.lastError = null;
     try {

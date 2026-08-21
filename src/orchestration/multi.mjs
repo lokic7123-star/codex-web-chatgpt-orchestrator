@@ -15,7 +15,7 @@ import { createBrainAdapter } from "./brain_adapter.mjs";
 import { createExecutorAdapter } from "./executor_adapter.mjs";
 import { ensureWorktree } from "./worktree.mjs";
 import { TERMINAL_STATUSES } from "../../scripts/protocol.mjs";
-import { createRunner, newState } from "./runner.mjs";
+import { createRunner, newState, DEFAULT_MAX_ROUNDS } from "./runner.mjs";
 import { resolve, sep } from "node:path";
 
 const clipStr = (v, n) => String(v ?? "").slice(0, n);
@@ -216,7 +216,7 @@ async function runOne({ entry, client, session, manager, log }) {
       manager.upsert({ id: rec.id, worktree_path: wt.path, worktree_branch: wt.branch });
     }
 
-    const executor = createExecutorAdapter({
+    const exec = createExecutorAdapter({
       cwd: effectiveCwd,
       onApproval: req => {
         try {
@@ -224,6 +224,7 @@ async function runOne({ entry, client, session, manager, log }) {
         } catch {}
       },
     });
+    executor = exec;
 
     // progress resume: same name continues from the saved runner snapshot
     // (round/history/checkpoint) unless spec sets fresh:true
@@ -232,8 +233,10 @@ async function runOne({ entry, client, session, manager, log }) {
     const restored = restoreRunnerState(saved, { goal: entry.goal, constraints: entry.constraints });
     if (restored) {
       st = restored;
-      st.maxRounds = Number.isInteger(entry.max_rounds) ? entry.max_rounds : (st.maxRounds ?? 20);
-      log(`[${rec.name}] resumed progress at round ${st.round} (generation ${st.executor_generation}, history ${st.history.length})`);
+      // audit F10: a saved max_rounds that already stopped the run once must
+      // not instantly re-stop the resume — omitted in spec = fresh default
+      st.maxRounds = Number.isInteger(entry.max_rounds) ? entry.max_rounds : DEFAULT_MAX_ROUNDS;
+      log(`[${rec.name}] resumed progress at round ${st.round} (generation ${st.executor_generation}, history ${st.history.length}, budget ${st.maxRounds} rounds)`);
     } else {
       st = newState(entry.goal, entry.constraints);
       if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;

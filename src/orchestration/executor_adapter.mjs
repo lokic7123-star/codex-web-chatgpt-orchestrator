@@ -95,7 +95,16 @@ export function createExecutorAdapter({
         });
         threadId = started.thread_id;
         return threadId;
-      })().finally(() => { ensuring = null; });
+      })().catch(error => {
+        // startThread failed (auth, bad model, crash): discard the
+        // half-initialized executor so the next execute can retry cleanly —
+        // keeping it would short-circuit every retry into a misleading
+        // "codex_thread_id is required" error (audit F6b)
+        try { executor?.close?.(); } catch {}
+        executor = null;
+        threadId = null;
+        throw error;
+      }).finally(() => { ensuring = null; });
     }
     return ensuring;
   }
