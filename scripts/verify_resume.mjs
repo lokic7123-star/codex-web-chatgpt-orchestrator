@@ -92,7 +92,9 @@ try {
   check("V5 terminal review sanitized (no instant preflight stop)", st2?.latestReview === null);
   check("V6 history carried over", Array.isArray(st2?.history) && st2.history.length === 2);
 
-  // a real resume raises the budget in the new spec (runOne does this too)
+  // resume budget semantics (audit F10): a spec that OMITS max_rounds grants
+  // a fresh default budget — the saved limit that already stopped the run
+  // must never re-stop it instantly. Simulating an explicit spec override:
   st2.maxRounds = 6;
 
   const runner2 = createRunner({

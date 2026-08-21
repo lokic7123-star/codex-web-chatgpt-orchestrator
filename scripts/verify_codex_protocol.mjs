@@ -88,5 +88,91 @@ function waiter(ex, turnId) {
   check("T6 watchdog pulses on all events", pulsed === 2);
 }
 
+// ---- T7/T8: failure-recovery path with a fake child (audit F11) ----
+import { PassThrough } from "node:stream";
+
+function makeFakeChild(registry, { echo = true } = {}) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdin = new PassThrough();
+  const listeners = {};
+  // self-echoing initialize: whatever id the adapter asks on stdin, answer
+  // success on stdout. echo:false simulates a hung app-server (initialize
+  // never answers) — used for the first child in the retry scenario.
+  if (echo) {
+    stdin.on("data", chunk => {
+      for (const l of String(chunk).split("\n").filter(Boolean)) {
+        try {
+          const msg = JSON.parse(l);
+          if (msg.method === "initialize") {
+            stdout.write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }) + "\n"));
+          }
+        } catch {}
+      }
+    });
+  }
+  const child = {
+    stdout,
+    stderr,
+    stdin,
+    on(ev, fn) { (listeners[ev] ??= []).push(fn); },
+    // kill(): record + fire exit asynchronously (like a real process death)
+    kill() {
+      registry.killed.push(child);
+      queueMicrotask(() => (listeners.exit || []).forEach(f => f(0, null)));
+    },
+    emitExit(code) { (listeners.exit || []).forEach(f => f(code ?? 0, null)); },
+  };
+  return child;
+}
+
+const waitFor = async (cond, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (cond()) return true; await new Promise(r => setTimeout(r, 25)); }
+  return cond();
+};
+
+// T7: retry after failed initialize must not let the KILLED child's stale
+// exit event tear down the fresh connection (F11 regression)
+{
+  const registry = { killed: [] };
+  const children = [];
+  // first child is SILENT (initialize never answers -> attempt times out);
+  // later children echo and reach ready
+  const ex = new CodexExecutor({
+    timeoutMs: 150,
+    spawnImpl: () => {
+      const c = makeFakeChild(registry, { echo: children.length > 0 });
+      children.push(c);
+      return c;
+    },
+  });
+  const attempt1 = ex.connect();
+  const timedOut = await attempt1.then(() => false, e => e.code === "CODEX_ADAPTER_TIMEOUT");
+  check("T7a first attempt fails via initialize timeout", timedOut);
+
+  const attempt2 = ex.connect(); // retry: kills child1, spawns echoing child2
+  const ready = await waitFor(() => ex.state === "ready");
+  check("T7b first child was killed for cleanup", registry.killed.length === 1);
+  check("T7c retry reaches ready state", ready && ex.state === "ready");
+
+  // now the STALE child's death event arrives — must be ignored
+  children[0]?.emitExit(1);
+  await new Promise(r => setTimeout(r, 50));
+  check("T7d stale child exit does not tear down fresh connection", ex.state === "ready");
+  await attempt2.catch(() => {});
+}
+
+// T8: the CURRENT child dying still fails the executor
+{
+  const registry = { killed: [] };
+  const ex = new CodexExecutor({ timeoutMs: 2000, spawnImpl: () => makeFakeChild(registry) });
+  await ex.connect();
+  const current = ex.child;
+  current.emitExit(3);
+  await new Promise(r => setTimeout(r, 50));
+  check("T8 current child exit marks executor unavailable", ex.state === "unavailable");
+}
+
 console.log(`\n${pass} passed, ${failCount} failed`);
 process.exit(failCount ? 1 : 0);

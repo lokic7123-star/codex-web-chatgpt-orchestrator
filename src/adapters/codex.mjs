@@ -86,6 +86,7 @@ export class CodexExecutor {
     idleMs = DEFAULT_IDLE_TIMEOUT_MS,
     onApproval = null,
     clientInfo = { name: "web-pro-orchestrator", title: "Web Pro Orchestrator", version: "0.1.0" },
+    spawnImpl = spawnCodex,
   } = {}) {
     this.args = args;
     this.cwd = cwd;
@@ -94,6 +95,7 @@ export class CodexExecutor {
     this.idleMs = idleMs;
     this.onApproval = onApproval;
     this.clientInfo = clientInfo;
+    this._spawnImpl = spawnImpl; // injectable for offline failure-path tests
     this.child = null;
     this.state = "disconnected";
     this.nextId = 1;
@@ -125,15 +127,22 @@ export class CodexExecutor {
     this.state = "starting";
     this.lastError = null;
     try {
-      this.child = spawnCodex(this.args, this.cwd, this.env);
+      this.child = this._spawnImpl(this.args, this.cwd, this.env);
     } catch (error) {
       this.state = "unavailable";
       this.lastError = String(error);
       throw Object.assign(new Error(`Codex Adapter unavailable: ${this.lastError}`), { code: "CODEX_ADAPTER_UNAVAILABLE" });
     }
-    this.child.on("error", error => this._fail(error));
-    this.child.on("exit", (code, signal) => {
-      if (this.state !== "closed") this._fail(new Error(`codex app-server exited (${code ?? "unknown"}${signal ? `, ${signal}` : ""})`));
+    // identity-guarded handlers (audit F11): the previous child is killed on
+    // retry and its exit event fires AFTER the new child exists — without the
+    // `child === this.child` check that stale death would tear down the fresh
+    // connection this retry is meant to establish.
+    const child = this.child;
+    child.on("error", error => { if (child === this.child) this._fail(error); });
+    child.on("exit", (code, signal) => {
+      if (child === this.child && this.state !== "closed") {
+        this._fail(new Error(`codex app-server exited (${code ?? "unknown"}${signal ? `, ${signal}` : ""})`));
+      }
     });
     const rl = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     rl.on("line", line => this._handleLine(line));
