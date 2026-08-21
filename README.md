@@ -95,7 +95,7 @@ node scripts/cli.mjs sessions                     # list registered sessions
 {
   "allowed_cwds": ["D:/work"],
   "sessions": [
-    { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10, "thread_rounds": 4, "worktree": true },
+    { "name": "refactor", "goal": "Extract helper module in src/", "cwd": "D:/work/repo1", "max_rounds": 10, "thread_rounds": 4, "worktree": true, "constraints": ["no network access"] },
     { "name": "docs", "goal": "Write README for the tools package", "cwd": "D:/work/repo2",
       "conversation": { "title": "docs planner" } }
   ]
@@ -110,7 +110,7 @@ node scripts/cli.mjs run-multi --spec plan.json
 - **Resume by name**: re-running a spec with the same session `name` returns to that session's recorded conversation, rebinds to the tab already showing it — and **continues from the saved progress** (round, history, checkpoint). The interrupted round is **re-executed** (its earlier attempt is kept in history), so non-idempotent tasks may repeat that round's side effects; the executor also starts a fresh thread seeded with the checkpoint. Omitting `max_rounds` on a resume grants a **fresh default budget** (a saved limit that already stopped the run never re-stops it instantly); constraints are inherited unless overridden. Add `"fresh": true` to an entry to deliberately start over.
 - **Worktree isolation** (`"worktree": true`): the worker edits its own `git worktree` under `~/.web-pro-orchestrator/worktrees/` on a `webpro/<session>` branch, so parallel sessions can safely share one repository. The worktree and branch are kept after the run — merging/removing is your call (the session result reminds you of both). Resume reuses the recorded worktree; `fresh: true` creates a new one. Requires the cwd to be a git repository.
 - **Focus note**: while sessions are sending, tabs may be brought to the foreground briefly (background tabs are throttled by the browser, which delays the send button). During a `run-multi` batch this browser is best left to the orchestrator — daily use will be interrupted a few times per round.
-- **cwd whitelist** (`allowed_cwds` at spec top level, or `WEB_PRO_ALLOWED_CWDS` env var, `;`-separated): every session cwd must fall under one of the roots, protecting against a typo'd spec pointing the worker elsewhere.
+- **cwd whitelist** (`allowed_cwds` at spec top level, or `WEB_PRO_ALLOWED_CWDS` env var, `;`-separated): every session cwd must fall under one of the roots, protecting against a typo'd spec pointing the worker elsewhere. The env var also governs single-session `run --cwd`.
 - **Thread rollover** (`thread_rounds`, optional): after N rounds on one executor thread, the brain summarizes progress into a checkpoint and the worker continues in a fresh thread seeded with it — long tasks don't drown the worker's context.
 - Session records (status, round, conversation identity, executor thread/generation) persist to `~/.codex/web-pro-orchestrator/sessions.json`; inspect anytime with `sessions`.
 - One session failing never takes the others down (`Promise.allSettled`).

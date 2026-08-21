@@ -30,8 +30,8 @@ Run from the project root (`web-pro-orchestrator` checkout):
 - `node scripts/cli.mjs select --title <t>` or `--id <id>` or `--url <u>` — select a conversation
 - `node scripts/cli.mjs turn --nonce` — M1 acceptance (exact reply check)
 - `node scripts/cli.mjs turn "<prompt>"` — one atomic brain turn, returns the exact new reply
-- `node scripts/cli.mjs run --goal "<goal>" [--max-rounds n] [--cwd <dir>]` — full bounded brain-hand loop until a terminal state
-- `node scripts/cli.mjs run-multi --spec plan.json` — N parallel brain-hand loops (each gets its own tab + workspace); spec is an array of `{name, goal, cwd, max_rounds?, thread_rounds?, fresh?, worktree?, conversation?}`. Re-running the same session `name` resumes its recorded conversation AND saved progress (round/history/checkpoint); set `"fresh": true` to start over. `"worktree": true` isolates the worker in its own git worktree (safe for parallel sessions on one repo). Top-level `allowed_cwds` restricts where workers may operate.
+- `node scripts/cli.mjs run --goal "<goal>" [--max-rounds n] [--cwd <dir>]` — full bounded brain-hand loop until a terminal state; `--cwd` is validated against `WEB_PRO_ALLOWED_CWDS` when that env var is set
+- `node scripts/cli.mjs run-multi --spec plan.json` — N parallel brain-hand loops (each gets its own tab + workspace); spec is an array of `{name, goal, cwd, max_rounds?, thread_rounds?, fresh?, worktree?, constraints?, conversation?}`. Re-running the same session `name` resumes its recorded conversation AND saved progress (round/history/checkpoint/constraints); set `"fresh": true` to start over. `"worktree": true` isolates the worker in its own git worktree (safe for parallel sessions on one repo). Top-level `allowed_cwds` restricts where workers may operate.
 - `node scripts/cli.mjs sessions` — list registered orchestration sessions (status/round/conversation)
 - `node scripts/cli.mjs doctor` — environment self-check: node/codex CLI/CDP endpoint/brain composer/session store
 - `node scripts/cli.mjs status` — runner state (note: CLI is stateless per invocation)
