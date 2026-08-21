@@ -1,6 +1,6 @@
 {
   "name": "web-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CLI + skill: drive web ChatGPT as a planning brain while a local Codex worker executes tasks.",
   "author": {
     "name": "web-pro-orchestrator contributors"

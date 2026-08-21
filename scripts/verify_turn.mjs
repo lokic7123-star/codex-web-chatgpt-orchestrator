@@ -18,36 +18,33 @@ try {
     const sel = await session.selectConversation({ title: argTitle });
     if (!sel.selected) {
       console.log(JSON.stringify({ ok: false, step: "select", error: sel.error, candidates: sel.candidates?.slice(0, 5) }, null, 2));
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
-  } else {
-    // no title: navigate to a fresh chat so the turn creates a new conversation
-    await session.client.cdp("Page.navigate", { url: "https://chatgpt.com/" });
-    await new Promise(r => setTimeout(r, 2500));
   }
 
-  const identityBefore = await session.getIdentity();
-  const result = await session.brainTurn(prompt, { timeoutMs: 90000, nonce });
+  const nonceDeadline = Date.now() + 90000;
+  const result = await session.brainTurn(prompt, { timeoutMs: 90000 });
   const reply = result.assistant_message || "";
 
   const containsNonce = reply.includes(nonce);
+  // brainTurn refreshes identity after the turn; a fresh chat gains its id here
   const identityAfter = await session.getIdentity();
-  const identityStable = !identityBefore.external_id || !identityAfter.external_id || identityBefore.external_id === identityAfter.external_id;
+  const identityStable = !result.conversation_id || !identityAfter.external_id || result.conversation_id === identityAfter.external_id;
 
   console.log(JSON.stringify({
-    ok: result.ok && containsNonce,
+    ok: result.ok && containsNonce && identityStable,
     nonce,
     reply,
     containsNonce,
     identity_stable: identityStable,
-    identity_before: identityBefore,
-    identity_after: identityAfter,
+    conversation_id: result.conversation_id,
     completion_reason: result.completion_reason,
   }, null, 2));
 
-  await session.client.close();
-  process.exit(result.ok && containsNonce ? 0 : 1);
+  session.client.close();
+  process.exitCode = result.ok && containsNonce && identityStable ? 0 : 1;
 } catch (e) {
   console.log(JSON.stringify({ ok: false, step: "error", error: e.message }, null, 2));
-  process.exit(1);
+  process.exitCode = 1;
 }

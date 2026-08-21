@@ -10,6 +10,8 @@ const suites = [
   ["verify_rollover.mjs"],
   ["verify_resume.mjs"],
   ["verify_worktree.mjs"],
+  ["verify_brain_adapter.mjs"],
+  ["verify_acceptance.mjs"],
 ];
 
 let failed = 0;

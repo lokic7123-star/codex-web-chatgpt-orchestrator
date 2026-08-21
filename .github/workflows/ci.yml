@@ -41,3 +41,6 @@ jobs:
 
       - name: Worktree isolation + cwd whitelist (offline)
         run: node scripts/verify_worktree.mjs
+
+      - name: Brain adapter protocol (offline)
+        run: node scripts/verify_brain_adapter.mjs
