@@ -20,7 +20,9 @@ const planCalls = [];
 const checkpointCalls = [];
 const rolloverSeeds = [];
 
-function mockBrain() {
+function mockBrain(sink = checkpointCalls) {
+  // steps implicit: review returns continue until round 4, then completed.
+  // `sink` isolates checkpoint bookkeeping per scenario.
   return {
     async plan({ round, checkpoint }) {
       planCalls.push({ round, checkpoint: checkpoint ?? null });
@@ -45,13 +47,13 @@ function mockBrain() {
           status: done ? "completed" : "continue",
           next_task: done ? "" : `task r${round + 1}`,
           evidence: done ? [{ acceptance_id: "A1", type: "file_check", pass: true, summary: "proof" }] : [],
-          reason: done ? "all proven" : "continue",
+          reason: done ? "all proven" : "mock continue",
         },
       };
     },
     async checkpoint({ history }) {
       const summary = `CP:${history.length}`;
-      checkpointCalls.push(summary);
+      sink.push(summary);
       return { content: [{ type: "text", text: "cp" }], structuredContent: { ok: true, summary } };
     },
   };
@@ -102,6 +104,31 @@ check("R7 plan received checkpoint from round 2 onward",
   && planCalls.find(c => c.round === 3)?.checkpoint !== null
   && planCalls.find(c => c.round === 0)?.checkpoint === null);
 check("R8 history recorded for all 5 rounds", st.history.length === 5);
+
+// R9/R10: a failing rollover must stop the run as blocked (ROLLOVER_FAILED),
+// not crash the process or silently continue on the old thread
+{
+  let stF = newState("rollover failure goal", []);
+  stF.maxRounds = 6;
+  const boomExecutor = {
+    async execute({ task }) {
+      return {
+        content: [{ type: "text", text: `did ${task}` }],
+        structuredContent: { status: "done", evidence: [{ acceptance_id: "A1", type: "file_check", pass: true, summary: "evidence" }], summary: "ok" },
+      };
+    },
+    async rollover() { throw new Error("worktree lock held"); },
+  };
+  const runnerF = createRunner({
+    getState: () => stF,
+    setState: ns => { stF = ns; },
+    brain: mockBrain([]),
+    executor: boomExecutor,
+  });
+  const rF = await runnerF.runUntilStop({ thread_rounds: 2 });
+  check("R9 failing rollover stops run as blocked", rF.status === "blocked" && rF.stage === "rollover");
+  check("R10 failure reason surfaces worktree lock message", /worktree lock/i.test(String(rF.reason)));
+}
 
 console.log(`\n${pass} passed, ${failCount} failed`);
 process.exit(failCount ? 1 : 0);

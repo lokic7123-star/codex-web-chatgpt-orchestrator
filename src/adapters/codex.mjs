@@ -105,8 +105,17 @@ export class CodexExecutor {
     this.lastError = null;
   }
 
-  async connect() {
-    if (this.child && this.state === "ready") return this;
+  connect() {
+    if (this.child && this.state === "ready") return Promise.resolve(this);
+    // in-flight guard: concurrent callers share one spawn instead of
+    // racing into two app-server children (audit F2)
+    if (!this._connecting) {
+      this._connecting = this._connect().finally(() => { this._connecting = null; });
+    }
+    return this._connecting;
+  }
+
+  async _connect() {
     this.state = "starting";
     this.lastError = null;
     try {

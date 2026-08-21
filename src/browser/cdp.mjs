@@ -275,17 +275,27 @@ export class BrainSession {
     // poll for the (asynchronously rendered) send button and click it.
     // Node-side polling with sync evaluate avoids awaitPromise inside a
     // navigation-prone context (which can throw "Promise was collected").
-    await this.client.activate();
+    //
+    // Focus policy (audit F1): do NOT steal foreground preemptively — in
+    // parallel runs every session activating would fight over the window.
+    // Activate lazily, only when the button stays missing/disabled long
+    // enough to indicate real background throttling.
     const sendStartedAt = Date.now();
     const sendDeadline = sendStartedAt + 30000;
     let sendResult = { ok: false, error: "no send button yet", retry: true };
     let refilled = false;
+    let activated = false;
     while (Date.now() < sendDeadline) {
       sendResult = await this.provider.findAndClickSend();
       if (sendResult.ok) break;
+      const elapsed = Date.now() - sendStartedAt;
+      if (!activated && elapsed >= 4000) {
+        activated = true;
+        await this.client.activate();
+      }
       // a throttled tab may render slowly; refill once in case the draft
       // was lost while waiting for the button to appear/enable
-      if (!refilled && Date.now() - sendStartedAt >= 10000) {
+      if (!refilled && elapsed >= 10000) {
         refilled = true;
         await this.provider.sendMessage(text);
       }

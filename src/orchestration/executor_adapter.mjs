@@ -58,6 +58,7 @@ export function createExecutorAdapter({
   let activeSnapshot = snapshot;
   let threadId = null;
   let pendingApproval = null;
+  let ensuring = null;
 
   const summarizeApproval = req => {
     try {
@@ -67,30 +68,36 @@ export function createExecutorAdapter({
     }
   };
 
-  async function ensureExecutor() {
-    if (executor) return;
-    if (!activeSnapshot) {
-      activeSnapshot = await freezeExecutorSnapshot({ resolveSnapshot: resolveSnapshot || readCodexConfigSnapshot });
+  // in-flight guard: concurrent ensure calls share one spawn (audit F2)
+  function ensureExecutor() {
+    if (executor) return Promise.resolve(threadId);
+    if (!ensuring) {
+      ensuring = (async () => {
+        if (!activeSnapshot) {
+          activeSnapshot = await freezeExecutorSnapshot({ resolveSnapshot: resolveSnapshot || readCodexConfigSnapshot });
+        }
+        const model = activeSnapshot.resolved.model;
+        const args = ["app-server", "--listen", "stdio://"];
+        executor = new CodexExecutor({
+          args,
+          cwd,
+          timeoutMs,
+          idleMs,
+          onApproval: req => {
+            pendingApproval = summarizeApproval(req);
+            if (typeof onApproval === "function") onApproval(req);
+          },
+        });
+        const started = await executor.startThread({
+          model: model || undefined,
+          cwd,
+          sandbox: "workspace-write", // allow the worker to write within the workspace (e.g. create files)
+        });
+        threadId = started.thread_id;
+        return threadId;
+      })().finally(() => { ensuring = null; });
     }
-    const model = activeSnapshot.resolved.model;
-    const args = ["app-server", "--listen", "stdio://"];
-    executor = new CodexExecutor({
-      args,
-      cwd,
-      timeoutMs,
-      idleMs,
-      onApproval: req => {
-        pendingApproval = summarizeApproval(req);
-        if (typeof onApproval === "function") onApproval(req);
-      },
-    });
-    const started = await executor.startThread({
-      model: model || undefined,
-      cwd,
-      sandbox: "workspace-write", // allow the worker to write within the workspace (e.g. create files)
-    });
-    threadId = started.thread_id;
-    return threadId;
+    return ensuring;
   }
 
   const adapter = {
