@@ -21,7 +21,7 @@ export function defaultSessionStore() {
 
 const RECORD_FIELDS = [
   "name", "goal", "cwd", "status", "round", "max_rounds", "executor_generation",
-  "conversation", "executor_thread_id", "last_error", "result_summary",
+  "conversation", "executor_thread_id", "last_error", "result_summary", "state",
 ];
 
 function waitSync(ms) {

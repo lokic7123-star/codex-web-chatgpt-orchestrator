@@ -31,7 +31,7 @@ Run from the project root (`web-pro-orchestrator` checkout):
 - `node scripts/cli.mjs turn --nonce` — M1 acceptance (exact reply check)
 - `node scripts/cli.mjs turn "<prompt>"` — one atomic brain turn, returns the exact new reply
 - `node scripts/cli.mjs run --goal "<goal>" [--max-rounds n] [--cwd <dir>]` — full bounded brain-hand loop until a terminal state
-- `node scripts/cli.mjs run-multi --spec plan.json` — N parallel brain-hand loops (each gets its own tab + workspace); spec is an array of `{name, goal, cwd, max_rounds?, thread_rounds?, conversation?}`. Re-running the same session `name` resumes its recorded conversation and reuses the existing tab.
+- `node scripts/cli.mjs run-multi --spec plan.json` — N parallel brain-hand loops (each gets its own tab + workspace); spec is an array of `{name, goal, cwd, max_rounds?, thread_rounds?, fresh?, conversation?}`. Re-running the same session `name` resumes its recorded conversation AND saved progress (round/history/checkpoint); set `"fresh": true` to start over.
 - `node scripts/cli.mjs sessions` — list registered orchestration sessions (status/round/conversation)
 - `node scripts/cli.mjs status` — runner state (note: CLI is stateless per invocation)
 

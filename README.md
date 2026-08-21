@@ -1,5 +1,7 @@
 # codex-web-chatgpt-orchestrator
 
+[![CI](https://github.com/lokic7123-star/codex-web-chatgpt-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/lokic7123-star/codex-web-chatgpt-orchestrator/actions/workflows/ci.yml)
+
 **Let web ChatGPT plan; let a local Codex worker execute.**
 
 A Codex plugin + CLI that drives a **user-visible web ChatGPT session** (the "brain") and a **local `codex app-server` worker** (the "hand") through a bounded brain-hand loop:
@@ -101,7 +103,7 @@ node scripts/cli.mjs run-multi --spec plan.json
 ```
 
 - Without `conversation`, each session starts a fresh ChatGPT conversation; with `conversation` (`title`, `id`, or `url`) it reuses an existing one.
-- **Resume by name**: re-running a spec with the same session `name` automatically returns to that session's recorded conversation and rebinds to the tab already showing it — no new tabs, no new conversations.
+- **Resume by name**: re-running a spec with the same session `name` returns to that session's recorded conversation, rebinds to the tab already showing it — and **continues from the saved progress** (round, history, checkpoint). Add `"fresh": true` to an entry to deliberately start over.
 - **Thread rollover** (`thread_rounds`, optional): after N rounds on one executor thread, the brain summarizes progress into a checkpoint and the worker continues in a fresh thread seeded with it — long tasks don't drown the worker's context.
 - Session records (status, round, conversation identity, executor thread/generation) persist to `~/.codex/web-pro-orchestrator/sessions.json`; inspect anytime with `sessions`.
 - One session failing never takes the others down (`Promise.allSettled`).
@@ -109,11 +111,15 @@ node scripts/cli.mjs run-multi --spec plan.json
 ## Verification scripts
 
 ```bash
-node scripts/verify_turn.mjs              # M1: atomic turn + nonce roundtrip
-node scripts/verify_executor.mjs <dir>    # M2: worker creates a proof file in <dir>
+node scripts/verify_turn.mjs              # M1: atomic turn + nonce roundtrip (live)
+node scripts/verify_executor.mjs <dir>    # M2: worker creates a proof file in <dir> (live, Codex quota)
 node scripts/verify_parallel.mjs [a|b]    # parallel sessions (a: live 2-tab turns, b: offline registry)
 node scripts/verify_rollover.mjs          # thread rollover + checkpoint seeding (offline)
+node scripts/verify_resume.mjs            # progress resume across invocations (offline)
+node scripts/verify_codex_protocol.mjs    # executor JSON-RPC handling (offline)
 ```
+
+CI runs every offline check on push/PR (see `.github/workflows/ci.yml`); the two live checks need a signed-in browser / Codex quota and stay manual.
 
 ## Safety boundaries
 

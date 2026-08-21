@@ -13,7 +13,57 @@
 import { CdpClient, BrainSession } from "../browser/cdp.mjs";
 import { createBrainAdapter } from "./brain_adapter.mjs";
 import { createExecutorAdapter } from "./executor_adapter.mjs";
+import { TERMINAL_STATUSES } from "../../scripts/protocol.mjs";
 import { createRunner, newState } from "./runner.mjs";
+
+const clipStr = (v, n) => String(v ?? "").slice(0, n);
+
+// Persistable runner-state snapshot: bounded (history/fingerprints capped,
+// bulky report text dropped — it is rebuilt by the executor each round).
+export function snapshotRunnerState(s = {}) {
+  const roundNum = Number.isInteger(Number(s.round)) ? Number(s.round) : 0;
+  return {
+    mode: s.mode,
+    goal: s.goal,
+    constraints: Array.isArray(s.constraints) ? s.constraints : [],
+    maxRounds: s.maxRounds,
+    round: roundNum,
+    checkpoint: s.checkpoint ? clipStr(s.checkpoint, 6000) : null,
+    executor_generation: s.executor_generation ?? 1,
+    history: Array.isArray(s.history) ? s.history.slice(-10) : [],
+    // keep only fingerprints of rounds that will NOT be re-executed; the
+    // round being redone already left one, and carrying it over would make
+    // the stagnation detector misfire "repeated" on the first resumed round
+    workspaceFingerprints: Array.isArray(s.workspaceFingerprints) ? s.workspaceFingerprints.slice(0, roundNum) : [],
+    latestPlan: s.latestPlan ? {
+      status: s.latestPlan.status || "continue",
+      task: clipStr(s.latestPlan.task, 1000),
+      acceptance: Array.isArray(s.latestPlan.acceptance) ? s.latestPlan.acceptance : [],
+      reason: clipStr(s.latestPlan.reason, 500),
+    } : null,
+    latestReview: s.latestReview ? {
+      status: s.latestReview.status || "continue",
+      reason: clipStr(s.latestReview.reason, 500),
+    } : null,
+  };
+}
+
+// Restore a saved snapshot for continuation. Sanitizes terminal markers so a
+// previously stopped run (blocked/max_rounds/...) can actually continue:
+// terminal reviews are cleared; only a "continue" plan survives as the
+// pending task. Returns null when nothing restorable is saved.
+export function restoreRunnerState(saved, { goal, constraints } = {}) {
+  if (!saved || typeof saved !== "object") return null;
+  if (saved.mode !== "brain-hand" || !Number.isInteger(Number(saved.round))) return null;
+  const st = { ...newState(goal ?? saved.goal ?? "", constraints ?? []), ...saved, goal: goal ?? saved.goal ?? "", constraints: constraints ?? [] };
+  st.round = Number(saved.round);
+  if (st.latestReview && TERMINAL_STATUSES.has(st.latestReview.status)) st.latestReview = null;
+  if (st.latestPlan && TERMINAL_STATUSES.has(st.latestPlan.status) && st.latestPlan.status !== "continue") st.latestPlan = null;
+  st.history = Array.isArray(st.history) ? st.history : [];
+  st.executor_generation = st.executor_generation ?? 1;
+  st.checkpoint = st.checkpoint ?? null;
+  return st;
+}
 
 export function normalizeEntries(spec) {
   const arr = Array.isArray(spec)
@@ -40,6 +90,7 @@ export function normalizeEntries(spec) {
       cwd: String(e.cwd),
       max_rounds: maxRounds,
       thread_rounds: threadRounds,
+      fresh: e.fresh === true,
       constraints: Array.isArray(e.constraints) ? e.constraints.map(String) : [],
       conversation: e.conversation && typeof e.conversation === "object" ? e.conversation : null,
     };
@@ -111,10 +162,21 @@ async function runOne({ entry, client, session, manager, log }) {
     conversation: session.identity,
   });
   log(`[${rec.name}] loop started (record ${rec.id})`);
-
   const executor = createExecutorAdapter({ cwd: entry.cwd });
-  let st = newState(entry.goal, entry.constraints);
-  if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;
+
+  // progress resume: same name continues from the saved runner snapshot
+  // (round/history/checkpoint) unless spec sets fresh:true
+  let st;
+  const saved = entry.fresh ? null : rec?.state;
+  const restored = restoreRunnerState(saved, { goal: entry.goal, constraints: entry.constraints });
+  if (restored) {
+    st = restored;
+    st.maxRounds = Number.isInteger(entry.max_rounds) ? entry.max_rounds : (st.maxRounds ?? 20);
+    log(`[${rec.name}] resumed progress at round ${st.round} (generation ${st.executor_generation}, history ${st.history.length})`);
+  } else {
+    st = newState(entry.goal, entry.constraints);
+    if (Number.isInteger(entry.max_rounds)) st.maxRounds = entry.max_rounds;
+  }
 
   const runner = createRunner({
     getState: () => st,
@@ -130,6 +192,7 @@ async function runOne({ entry, client, session, manager, log }) {
         executor_generation: s.executor_generation ?? 1,
         conversation: session.identity,
         executor_thread_id: executor.threadId,
+        state: snapshotRunnerState(s),
       });
     },
   });
@@ -141,6 +204,7 @@ async function runOne({ entry, client, session, manager, log }) {
       status: result.status || "unknown",
       round: st.round,
       executor_generation: st.executor_generation ?? 1,
+      state: snapshotRunnerState(st),
       conversation: session.identity,
       executor_thread_id: executor.threadId,
       // a terminal reason is not necessarily an error; only failures are
