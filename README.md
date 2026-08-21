@@ -132,4 +132,4 @@ node scripts/verify_rollover.mjs          # thread rollover + checkpoint seeding
 
 ## License
 
-Copyright © 2026. All rights reserved. Contact the author for licensing.
+MIT — see [LICENSE](LICENSE).

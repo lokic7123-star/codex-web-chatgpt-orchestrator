@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Codex plugin + CLI: drive web ChatGPT as a planning brain (chat quota) and Codex as executor (Codex quota) in a brain-hand loop.",
   "type": "module",
+  "license": "MIT",
   "private": true,
   "engines": {
     "node": ">=22"
