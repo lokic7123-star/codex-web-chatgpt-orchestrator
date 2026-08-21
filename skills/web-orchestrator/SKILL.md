@@ -43,7 +43,7 @@ Run from the project root (`web-pro-orchestrator` checkout):
 - **Acceptance gate**: a run reaches `completed` only when every mandatory acceptance criterion has a passing evidence item mapped by id from the executor report; missing/failed evidence downgrades to `blocked`.
 - **Watchdog**: the Codex worker turn has a hard and an idle timeout; on timeout it interrupts, then kills the app-server child, then fails the round as `failed`. It never auto-approves.
 - **awaiting_user**: approval requests stop the run in an `awaiting_user` state with the request details surfaced in logs and the session record; nothing is ever auto-approved.
-- **Parallel sessions** (`run-multi`): each session binds an exclusive chatgpt.com tab (never steals other tabs), its own codex app-server child and workspace; one session failing does not affect the others. Same `name` = same conversation on later runs.
+- **Parallel sessions** (`run-multi`): each session binds an exclusive chatgpt.com tab (never steals other tabs), its own codex app-server child and workspace; one session failing does not affect the others. Same `name` = same conversation on later runs. Note: while sessions are sending, tabs may briefly take the foreground (background tabs are throttled); during a batch this browser is best left to the orchestrator.
 - **Thread rollover** (`thread_rounds` in spec): after N rounds the brain compresses progress into a checkpoint and the worker continues in a fresh executor thread seeded with it — prevents long tasks from drowning worker context.
 
 ## When to use / not use

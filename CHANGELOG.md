@@ -19,6 +19,7 @@
 - Turn failures (e.g. usage limits) fail fast instead of hanging until the fallback timeout.
 - Fresh-tab composer handling (textarea vs contenteditable), background-tab throttling, and DevTools websocket drops on suspended tabs.
 - Identical replies to identical prompts are no longer rejected as "stale".
+- Tab focus is only taken when the send button stays unavailable (lazy activation), so parallel sessions no longer fight over the window on every turn.
 - Status parsing word boundaries ("not done yet" is not `completed`).
 
 ### Changed
