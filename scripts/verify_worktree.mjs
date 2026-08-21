@@ -10,7 +10,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ensureWorktree, removeWorktree, defaultWorktreeBase } from "../src/orchestration/worktree.mjs";
 import { normalizeEntries, validateAllowedCwds } from "../src/orchestration/multi.mjs";
@@ -59,6 +59,18 @@ try {
   check("W4 fresh creates new isolated worktree",
     wt4.reused === false && wt4.path !== wt1.path && existsSync(wt4.path) && wt4.branch !== wt1.branch);
 
+  // W2b cross-repo worktree must NOT be reused (audit S3)
+  const repo2 = join(base, "repo2");
+  mkdirSync(repo2, { recursive: true });
+  await exec("git", ["init", "-q"], { cwd: repo2 });
+  writeFileSync(join(repo2, "other.txt"), "other\n");
+  await exec("git", ["-C", repo2, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "."]);
+  await exec("git", ["-C", repo2, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "-m", "init"]);
+  const wtOther = await ensureWorktree({ name: "gamma", repoCwd: repo2 });
+  const attempt = await ensureWorktree({ name: "gamma", repoCwd: repo, existingPath: wtOther.path });
+  check("W2b worktree of another repo is not reused",
+    attempt.reused === false && resolve(attempt.path) !== resolve(wtOther.path));
+
   // W5 cleanup helper (run from the main repo, with retry for AV locks)
   await removeWorktree(wt4.path, { force: true, repoCwd: repo });
   check("W5 removeWorktree removes the directory", !existsSync(wt4.path));
@@ -80,7 +92,7 @@ try {
   check("W8 empty whitelist disables the guard", true);
 
   // cleanup remaining worktrees
-  for (const wt of [wt1, wt2]) {
+  for (const wt of [wt1, wt2, wtOther, attempt]) {
     if (existsSync(wt.path)) await removeWorktree(wt.path, { force: true, repoCwd: repo }).catch(() => {});
   }
 } finally {

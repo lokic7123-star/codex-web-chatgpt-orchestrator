@@ -38,6 +38,7 @@ Run from the project root (`web-pro-orchestrator` checkout):
 
 ## Key semantics
 
+- **Data egress**: during `run`, the goal, the plan, and the worker's output (up to ~6000 characters per round) are sent into your ChatGPT account history automatically — no masking, no confirmation step. Never point sessions at code whose content must not appear there.
 - **Atomic brain turn** (`turn`): sends a prompt, waits for the exact new reply, and rejects stray/stale messages via a before-count baseline plus per-turn conversation-identity checks.
 - **Acceptance gate**: a run reaches `completed` only when every mandatory acceptance criterion has a passing evidence item mapped by id from the executor report; missing/failed evidence downgrades to `blocked`.
 - **Watchdog**: the Codex worker turn has a hard and an idle timeout; on timeout it interrupts, then kills the app-server child, then fails the round as `failed`. It never auto-approves.

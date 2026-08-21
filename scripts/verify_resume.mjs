@@ -114,6 +114,15 @@ try {
   // ---- fresh:true escape hatch must ignore saved state ----
   const ignored = restoreRunnerState(null, { goal: "x", constraints: [] });
   check("V10 null snapshot restores to nothing", ignored === null);
+
+  // ---- constraints inherit when spec omits them (audit S2) ----
+  const savedWithConstraints = { ...saved, constraints: ["no-network", "windows-only"] };
+  const stInherit = restoreRunnerState(savedWithConstraints, { goal: "long goal", constraints: [] });
+  check("V11 empty constraints inherit saved values",
+    JSON.stringify(stInherit?.constraints) === JSON.stringify(["no-network", "windows-only"]));
+  const stOverride = restoreRunnerState(savedWithConstraints, { goal: "long goal", constraints: ["new-dir"] });
+  check("V12 explicit constraints still override",
+    JSON.stringify(stOverride?.constraints) === JSON.stringify(["new-dir"]));
 } finally {
   try { rmSync(file, { force: true }); } catch {}
 }

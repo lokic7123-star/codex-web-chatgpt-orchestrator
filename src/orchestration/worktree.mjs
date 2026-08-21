@@ -27,6 +27,14 @@ async function git(args, cwd) {
   return exec("git", args, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
 }
 
+// absolute path of the repo a working directory belongs to (its common .git)
+async function gitCommonDir(p) {
+  const { stdout } = await git(["rev-parse", "--git-common-dir"], p);
+  const out = String(stdout).trim();
+  const absolute = out.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(out);
+  return absolute ? resolve(out) : resolve(p, out);
+}
+
 /**
  * Ensure an isolated git worktree for a session.
  * - existingPath still valid -> reuse it (resume semantics)
@@ -45,10 +53,14 @@ export async function ensureWorktree({ name, repoCwd, existingPath = null, baseD
 
   if (existingPath && existsSync(existingPath)) {
     try {
-      const inside = await git(["rev-parse", "--is-inside-work-tree"], resolve(existingPath));
-      if (String(inside.stdout).trim() === "true") {
-        const head = await git(["rev-parse", "--abbrev-ref", "HEAD"], resolve(existingPath));
-        return { path: resolve(existingPath), branch: String(head.stdout).trim(), reused: true };
+      const wtDir = resolve(existingPath);
+      const inside = await git(["rev-parse", "--is-inside-work-tree"], wtDir);
+      const branch = String((await git(["rev-parse", "--abbrev-ref", "HEAD"], wtDir)).stdout).trim();
+      // reuse ONLY if it is a worktree of THE SAME repository and one of ours
+      // (webpro/* branch) — a polluted/repurposed store path must not cross repos
+      const sameRepo = (await gitCommonDir(wtDir)) === (await gitCommonDir(repo));
+      if (String(inside.stdout).trim() === "true" && sameRepo && branch.startsWith("webpro/")) {
+        return { path: wtDir, branch, reused: true };
       }
     } catch {}
   }

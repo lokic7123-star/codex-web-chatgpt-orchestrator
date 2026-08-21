@@ -53,11 +53,17 @@ export function snapshotRunnerState(s = {}) {
 // Restore a saved snapshot for continuation. Sanitizes terminal markers so a
 // previously stopped run (blocked/max_rounds/...) can actually continue:
 // terminal reviews are cleared; only a "continue" plan survives as the
-// pending task. Returns null when nothing restorable is saved.
+// pending task. Omitted goal/constraints INHERIT the saved values (spec
+// authors resuming a session should not have to re-type constraints).
+// Returns null when nothing restorable is saved.
 export function restoreRunnerState(saved, { goal, constraints } = {}) {
   if (!saved || typeof saved !== "object") return null;
   if (saved.mode !== "brain-hand" || !Number.isInteger(Number(saved.round))) return null;
-  const st = { ...newState(goal ?? saved.goal ?? "", constraints ?? []), ...saved, goal: goal ?? saved.goal ?? "", constraints: constraints ?? [] };
+  const inheritedGoal = (goal && String(goal).trim()) || saved.goal || "";
+  const inheritedConstraints = Array.isArray(constraints) && constraints.length > 0
+    ? constraints
+    : (Array.isArray(saved.constraints) ? saved.constraints : []);
+  const st = { ...newState(inheritedGoal, inheritedConstraints), ...saved, goal: inheritedGoal, constraints: inheritedConstraints };
   st.round = Number(saved.round);
   if (st.latestReview && TERMINAL_STATUSES.has(st.latestReview.status)) st.latestReview = null;
   if (st.latestPlan && TERMINAL_STATUSES.has(st.latestPlan.status) && st.latestPlan.status !== "continue") st.latestPlan = null;

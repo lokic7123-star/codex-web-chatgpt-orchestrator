@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Web Pro Orchestrator",
     "shortDescription": "Web ChatGPT plans, Codex executes (CLI + skill, no MCP).",
-    "longDescription": "Uses CDP against a user-visible Chrome/Edge window with a dedicated profile to drive web ChatGPT (brain, chat quota) and a codex app-server worker (hand, Codex quota) in a bounded brain-hand loop. Exposed as a CLI (`web-orchestrator`) and a Codex skill. No API keys, no cookie reading, no CAPTCHA bypass; sign in manually.",
+    "longDescription": "Uses CDP against a user-visible Chrome/Edge window with a dedicated profile to drive web ChatGPT (brain, chat quota) and a codex app-server worker (hand, Codex quota) in a bounded brain-hand loop. Exposed as a CLI (`web-orchestrator`) and a Codex skill. No API keys, no cookie reading, no CAPTCHA bypass; sign in manually. Note: running a loop sends the goal, plan, and worker output (up to ~6000 chars per round) into your ChatGPT account history — do not point sessions at code that must not appear there.",
     "developerName": "web-pro-orchestrator",
     "category": "Productivity",
     "capabilities": ["Interactive", "CLI"],
